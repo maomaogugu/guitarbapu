@@ -1,0 +1,2 @@
+"""Central logging configuration boundary."""
+
