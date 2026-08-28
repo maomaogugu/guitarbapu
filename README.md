@@ -64,7 +64,7 @@ for note in analysis.notes:
     print(note.name, note.start, note.duration)
 ```
 
-`analysis.features["pitch_hz"]` 保存逐帧的频率数组；静音或低能量帧以 `NaN` 表示。检测器默认覆盖约 C2-C6，可通过 `fmin_hz`、`fmax_hz`、`frame_length` 和 `hop_length` 调整。
+`analysis.features["pitch_hz"]` 保存逐帧的频率数组；静音或低能量帧以 `NaN` 表示。检测器默认保留标准吉他可演奏范围 E2-E6（`min_note_midi=40`、`max_note_midi=88`），避免把低于六弦空弦的假低音写进 TAB；其他调弦可通过 `min_note_midi`、`max_note_midi`、`fmin_hz`、`fmax_hz`、`frame_length` 和 `hop_length` 调整。
 
 ### Phase 4 音符清理与节奏
 

@@ -46,6 +46,8 @@ class AudioAnalyzer:
         blip_max_duration: float = 0.06,
         min_onset_segment: float = 0.15,
         beat_subdivision: int = 4,
+        min_note_midi: int | None = 40,
+        max_note_midi: int | None = 88,
     ) -> None:
         if not 0 < fmin_hz < fmax_hz:
             raise ValueError("fmin_hz must be positive and lower than fmax_hz")
@@ -55,9 +57,21 @@ class AudioAnalyzer:
             raise ValueError("hop_length must be a positive integer")
         if not 0 <= energy_threshold <= 1:
             raise ValueError("energy_threshold must be between 0 and 1")
+        if min_note_midi is not None and not 0 <= min_note_midi <= 127:
+            raise ValueError("min_note_midi must be between 0 and 127")
+        if max_note_midi is not None and not 0 <= max_note_midi <= 127:
+            raise ValueError("max_note_midi must be between 0 and 127")
+        if (
+            min_note_midi is not None
+            and max_note_midi is not None
+            and min_note_midi > max_note_midi
+        ):
+            raise ValueError("min_note_midi must not exceed max_note_midi")
 
         self.fmin_hz = float(fmin_hz)
         self.fmax_hz = float(fmax_hz)
+        self.min_note_midi = min_note_midi
+        self.max_note_midi = max_note_midi
         self.frame_length = int(frame_length)
         self.hop_length = int(hop_length)
         self.energy_threshold = float(energy_threshold)
@@ -203,13 +217,23 @@ class AudioAnalyzer:
         append_active_note()
         return tuple(notes)
 
+    def _filter_playable_notes(self, notes: tuple[Note, ...]) -> tuple[Note, ...]:
+        """Drop events outside the configured instrument's playable range."""
+
+        return tuple(
+            note
+            for note in notes
+            if (self.min_note_midi is None or note.midi >= self.min_note_midi)
+            and (self.max_note_midi is None or note.midi <= self.max_note_midi)
+        )
+
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
         """Run pitch detection and convert it into ``Note`` events."""
 
         raw_notes = self._notes_from_frequencies(
             self.detect_pitch(audio), audio.sample_rate
         )
-        return self.note_processor.process(raw_notes)
+        return self._filter_playable_notes(self.note_processor.process(raw_notes))
 
     def analyze(self, audio: AudioData) -> AudioAnalysis:
         """Analyze decoded audio and return pitch features plus note events."""
@@ -217,7 +241,9 @@ class AudioAnalyzer:
         frequencies = self.detect_pitch(audio)
         raw_notes = self._notes_from_frequencies(frequencies, audio.sample_rate)
         onset_times, timing = self.rhythm_analyzer.detect(audio)
-        notes = self.note_processor.process(raw_notes, onset_times=onset_times)
+        notes = self._filter_playable_notes(
+            self.note_processor.process(raw_notes, onset_times=onset_times)
+        )
         rhythm = self.rhythm_analyzer.build_analysis(
             audio,
             notes,
@@ -231,6 +257,8 @@ class AudioAnalyzer:
                 "pitch_hz": frequencies,
                 "onset_times": np.asarray(onset_times, dtype=np.float32),
                 "tempo_bpm": timing.tempo_bpm,
+                "min_note_midi": self.min_note_midi,
+                "max_note_midi": self.max_note_midi,
             },
             notes=notes,
             raw_notes=raw_notes,

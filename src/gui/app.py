@@ -834,6 +834,8 @@ class MainWindow(QMainWindow):
                 "hop_length": analyzer.hop_length,
                 "energy_threshold": analyzer.energy_threshold,
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "min_note_midi": analyzer.min_note_midi,
+                "max_note_midi": analyzer.max_note_midi,
                 "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
             }

@@ -88,3 +88,20 @@ def test_silence_does_not_create_notes(monkeypatch):
     audio = AudioData(np.zeros(8), 8000, 8 / 8000, 1)
 
     assert AudioAnalyzer(frame_length=4, hop_length=2).detect_notes(audio) == ()
+
+
+def test_analyzer_filters_notes_outside_configured_guitar_range():
+    analyzer = AudioAnalyzer(min_note_midi=40, max_note_midi=88)
+    notes = (
+        Note(36, start=0.0, duration=0.2),
+        Note(38, start=0.2, duration=0.2),
+        Note(40, start=0.4, duration=0.2),
+        Note(88, start=0.6, duration=0.2),
+        Note(89, start=0.8, duration=0.2),
+    )
+
+    filtered = analyzer._filter_playable_notes(notes)
+
+    assert [note.midi for note in filtered] == [40, 88]
+    drop_d_filtered = AudioAnalyzer(min_note_midi=38)._filter_playable_notes(notes)
+    assert [note.midi for note in drop_d_filtered] == [38, 40, 88]
