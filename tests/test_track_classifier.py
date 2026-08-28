@@ -9,11 +9,12 @@ from src.music.chord import Chord
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
 from src.music.timing import TimingInfo, quantize_notes
+from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.track import TrackRole
 from src.project.track import TranscriptionTrack
 
 
-def _analysis(notes, *, chords=()):
+def _analysis(notes, *, chords=(), techniques=()):
     notes = tuple(notes)
     timing = TimingInfo(tempo_bpm=120.0, time_signature=(4, 4))
     return AudioAnalysis(
@@ -26,6 +27,7 @@ def _analysis(notes, *, chords=()):
             quantized_notes=quantize_notes(notes, timing),
         ),
         chords=tuple(chords),
+        techniques=tuple(techniques),
     )
 
 
@@ -124,3 +126,22 @@ def test_track_model_validates_role_confidence_and_metadata():
             tablature=tablature,
             confidence=2.0,
         )
+
+
+def test_classifier_keeps_technique_only_with_its_logical_note():
+    lead = Note(69, start=0.0, duration=0.5, confidence=0.9)
+    chord_notes = tuple(
+        Note(midi, start=1.0, duration=1.0, confidence=0.8)
+        for midi in (48, 52, 55)
+    )
+    detection = TechniqueDetection(GuitarTechnique.VIBRATO, lead, 0.8)
+    analysis = _analysis(
+        (lead,) + chord_notes,
+        chords=(Chord.from_midis((48, 52, 55), start=1.0, duration=1.0),),
+        techniques=(detection,),
+    )
+
+    lead_track, rhythm_track = TrackClassifier().classify(analysis)
+
+    assert lead_track.analysis.techniques == (detection,)
+    assert rhythm_track.analysis.techniques == ()

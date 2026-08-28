@@ -4,10 +4,11 @@ from src.audio.analyzer import AudioAnalysis
 from src.audio.rhythm import RhythmAnalysis
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
+from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.timing import QuantizedNote, Rest, TimingInfo
 
 
-def _analysis(items, *, tempo=120.0, rests=()):
+def _analysis(items, *, tempo=120.0, rests=(), techniques=()):
     notes = tuple(item.source for item in items)
     return AudioAnalysis(
         duration_seconds=4.0,
@@ -23,6 +24,7 @@ def _analysis(items, *, tempo=120.0, rests=()):
             quantized_notes=tuple(items),
             rests=tuple(rests),
         ),
+        techniques=tuple(techniques),
     )
 
 
@@ -93,3 +95,19 @@ def test_simultaneous_notes_create_distinct_string_events():
 
     assert len(tab.events) == 3
     assert len({event.string for event in tab.events}) == 3
+
+
+def test_generator_maps_technique_and_its_confidence_to_tab_event():
+    item = _item(64, 0)
+    detection = TechniqueDetection(
+        GuitarTechnique.VIBRATO,
+        item.source,
+        0.84,
+    )
+
+    tab = TabGenerator().generate(
+        _analysis((item,), techniques=(detection,))
+    )
+
+    assert tab.events[0].technique == "vibrato"
+    assert tab.events[0].technique_confidence == 0.84

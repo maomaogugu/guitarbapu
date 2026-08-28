@@ -126,6 +126,20 @@ class TextTabRenderer:
         if tablature.warnings:
             lines.append("警告：")
             lines.extend(f"- {warning}" for warning in tablature.warnings)
+        techniques = [event for event in tablature.events if event.technique]
+        if techniques:
+            lines.append("")
+            lines.append("技巧候选（请试听确认）：")
+            for event in techniques:
+                confidence = (
+                    f"，可信度 {event.technique_confidence:.0%}"
+                    if event.technique_confidence is not None
+                    else ""
+                )
+                name = event.note.name if event.note is not None else "未知音符"
+                lines.append(
+                    f"- {event.start:.2f}s {name}: {event.technique}{confidence}"
+                )
         return "\n".join(lines).rstrip()
 
 

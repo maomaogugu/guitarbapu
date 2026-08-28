@@ -12,6 +12,7 @@ from src.music.guitar import Guitar
 from src.music.note import Note
 from src.music.tab import TabEvent, TabRest, Tablature, UnmappedNote
 from src.music.timing import QuantizedNote, Rest, TimingInfo
+from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.track import TrackRole
 from src.project import (
     CURRENT_SCHEMA_VERSION,
@@ -58,6 +59,14 @@ def _project(audio_path):
             rests=(Rest(0.0, 0.5, 0.0, 1.0),),
         ),
         chords=(Chord.from_midis((48, 52, 55), start=0.5, duration=0.5),),
+        techniques=(
+            TechniqueDetection(
+                GuitarTechnique.VIBRATO,
+                source,
+                0.81,
+                pitch_change_semitones=0.22,
+            ),
+        ),
     )
     tablature = Tablature(
         guitar=Guitar.standard(capo=1),
@@ -70,6 +79,8 @@ def _project(audio_path):
                 note=source,
                 start_beat=1.0,
                 duration_beats=1.0,
+                technique="vibrato",
+                technique_confidence=0.81,
                 confidence=0.92,
             ),
         ),
@@ -105,6 +116,7 @@ def test_project_json_round_trip_uses_relative_audio_reference(tmp_path):
     assert loaded.analysis.notes == _project(audio_path).analysis.notes
     assert loaded.analysis.rhythm == _project(audio_path).analysis.rhythm
     assert loaded.analysis.chords == _project(audio_path).analysis.chords
+    assert loaded.analysis.techniques == _project(audio_path).analysis.techniques
     assert loaded.analysis.features == {}
     assert loaded.tablature == _project(audio_path).tablature
     assert loaded.analysis_parameters["fmin_hz"] == 65.41
@@ -127,6 +139,7 @@ def test_project_without_chords_field_remains_backward_compatible(tmp_path):
     save_project(_project(None), project_path)
     payload = json.loads(project_path.read_text(encoding="utf-8"))
     payload["analysis"].pop("chords")
+    payload["analysis"].pop("techniques")
     payload.pop("tracks")
     payload.pop("active_track_id")
     project_path.write_text(json.dumps(payload), encoding="utf-8")
@@ -134,6 +147,7 @@ def test_project_without_chords_field_remains_backward_compatible(tmp_path):
     loaded = load_project(project_path)
 
     assert loaded.analysis.chords == ()
+    assert loaded.analysis.techniques == ()
     assert loaded.analysis.notes
 
 
@@ -164,6 +178,7 @@ def test_project_round_trip_preserves_logical_tracks(tmp_path):
     assert loaded.active_track is not None
     assert loaded.active_track.track_id == track.track_id
     assert loaded.active_track.analysis.notes == track.analysis.notes
+    assert loaded.active_track.analysis.techniques == track.analysis.techniques
     assert loaded.active_track.tablature == track.tablature
     assert loaded.tracks[0].role is TrackRole.RHYTHM
     assert loaded.tracks[0].metadata["logical"] is True

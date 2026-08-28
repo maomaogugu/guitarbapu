@@ -20,6 +20,7 @@ class TabEvent:
     measure: int = 1
     tie_to_next: bool = False
     technique: str | None = None
+    technique_confidence: float | None = None
     confidence: float | None = None
 
     def __post_init__(self) -> None:
@@ -37,6 +38,11 @@ class TabEvent:
             raise ValueError("measure must be positive")
         if self.confidence is not None and not 0 <= self.confidence <= 1:
             raise ValueError("confidence must be between 0 and 1")
+        if (
+            self.technique_confidence is not None
+            and not 0 <= self.technique_confidence <= 1
+        ):
+            raise ValueError("technique_confidence must be between 0 and 1")
 
 
 @dataclass(frozen=True)

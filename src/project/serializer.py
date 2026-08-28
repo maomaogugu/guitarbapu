@@ -13,6 +13,7 @@ from ..music.chord import Chord
 from ..music.guitar import Guitar, GuitarString
 from ..music.note import Note
 from ..music.tab import TabEvent, TabRest, Tablature, UnmappedNote
+from ..music.technique import GuitarTechnique, TechniqueDetection
 from ..music.timing import QuantizedNote, Rest, TimingInfo
 from ..music.track import TrackRole
 from .model import TranscriptionProject
@@ -51,6 +52,35 @@ def _note_from_dict(data: Mapping[str, Any]) -> Note:
         ),
         confidence=(
             None if data.get("confidence") is None else float(data["confidence"])
+        ),
+    )
+
+
+def _technique_to_dict(detection: TechniqueDetection) -> dict[str, Any]:
+    return {
+        "technique": detection.technique.value,
+        "note": _note_to_dict(detection.note),
+        "confidence": detection.confidence,
+        "related_note": (
+            _note_to_dict(detection.related_note)
+            if detection.related_note is not None
+            else None
+        ),
+        "pitch_change_semitones": detection.pitch_change_semitones,
+    }
+
+
+def _technique_from_dict(data: Mapping[str, Any]) -> TechniqueDetection:
+    related = data.get("related_note")
+    return TechniqueDetection(
+        technique=GuitarTechnique(str(data["technique"])),
+        note=_note_from_dict(data["note"]),
+        confidence=float(data["confidence"]),
+        related_note=_note_from_dict(related) if related is not None else None,
+        pitch_change_semitones=(
+            None
+            if data.get("pitch_change_semitones") is None
+            else float(data["pitch_change_semitones"])
         ),
     )
 
@@ -194,6 +224,9 @@ def _analysis_to_dict(analysis: AudioAnalysis) -> dict[str, Any]:
         "notes": [_note_to_dict(note) for note in analysis.notes],
         "raw_notes": [_note_to_dict(note) for note in analysis.raw_notes],
         "chords": [_chord_to_dict(chord) for chord in analysis.chords],
+        "techniques": [
+            _technique_to_dict(detection) for detection in analysis.techniques
+        ],
         "rhythm": _rhythm_to_dict(analysis.rhythm),
     }
 
@@ -210,6 +243,9 @@ def _analysis_from_dict(data: Mapping[str, Any]) -> AudioAnalysis:
         ),
         rhythm=_rhythm_from_dict(data.get("rhythm")),
         chords=tuple(_chord_from_dict(item) for item in data.get("chords", ())),
+        techniques=tuple(
+            _technique_from_dict(item) for item in data.get("techniques", ())
+        ),
     )
 
 
@@ -255,6 +291,7 @@ def _tab_event_to_dict(event: TabEvent) -> dict[str, Any]:
         "measure": event.measure,
         "tie_to_next": event.tie_to_next,
         "technique": event.technique,
+        "technique_confidence": event.technique_confidence,
         "confidence": event.confidence,
     }
 
@@ -278,6 +315,11 @@ def _tab_event_from_dict(data: Mapping[str, Any]) -> TabEvent:
         measure=int(data.get("measure", 1)),
         tie_to_next=bool(data.get("tie_to_next", False)),
         technique=data.get("technique"),
+        technique_confidence=(
+            None
+            if data.get("technique_confidence") is None
+            else float(data["technique_confidence"])
+        ),
         confidence=(
             None if data.get("confidence") is None else float(data["confidence"])
         ),

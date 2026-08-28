@@ -111,6 +111,11 @@ class TrackClassifier:
             raw_notes=notes,
             rhythm=rhythm,
             chords=chords,
+            techniques=tuple(
+                detection
+                for detection in source.techniques
+                if self._note_key(detection.note) in note_keys
+            ),
         )
 
     def classify(self, analysis: AudioAnalysis) -> tuple[TrackCandidate, ...]:

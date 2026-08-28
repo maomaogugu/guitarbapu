@@ -74,6 +74,38 @@ def test_timing_edit_recalculates_seconds_measure_and_tie():
     assert controller.tablature.measure_count == 2
 
 
+def test_manual_technique_change_clears_automatic_confidence():
+    source = Note(64, start=0.0, duration=0.5)
+    tablature = Tablature(
+        events=(
+            TabEvent(
+                string=1,
+                fret=0,
+                note=source,
+                start_beat=0.0,
+                duration_beats=1.0,
+                technique="vibrato",
+                technique_confidence=0.8,
+            ),
+        ),
+        tempo_bpm=120.0,
+    )
+    controller = TabEditController(tablature)
+
+    changed = controller.update_event(
+        0,
+        midi=64,
+        string=1,
+        fret=0,
+        start_beat=0.0,
+        duration_beats=1.0,
+        technique="bend",
+    )
+
+    assert controller.tablature.events[changed].technique == "bend"
+    assert controller.tablature.events[changed].technique_confidence is None
+
+
 def test_insert_delete_undo_redo_and_saved_state():
     controller = TabEditController(_tablature())
 

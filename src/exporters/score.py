@@ -1,6 +1,15 @@
 """Convert structured TAB into a music21 score shared by file exporters."""
 
-from music21 import articulations, instrument, meter, metadata, note, stream, tempo
+from music21 import (
+    articulations,
+    expressions,
+    instrument,
+    meter,
+    metadata,
+    note,
+    stream,
+    tempo,
+)
 
 from ..music.tab import TabEvent, Tablature
 
@@ -49,6 +58,15 @@ def tablature_to_score(tablature: Tablature) -> stream.Score:
                 articulations.FretIndication(event.fret),
             )
         )
+        if event.technique:
+            # A text expression is intentionally used for this first
+            # recognition baseline. It survives MusicXML export without
+            # claiming exact start/end spanners that the detector does not
+            # yet model reliably.
+            part.insert(
+                float(start_beat),
+                expressions.TextExpression(event.technique),
+            )
         part.insert(float(start_beat), exported_note)
 
     score.insert(0, part)

@@ -18,6 +18,7 @@ from src.audio.separator import (
 from src.audio.transcription_service import TranscriptionService
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
+from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.track import TrackRole
 
 
@@ -61,6 +62,18 @@ class _Separator:
         )
 
 
+class _TechniqueAnalyzer:
+    def detect(self, audio, notes, *, pitch_hz=None, pitch_hop_length=None):
+        note = tuple(notes)[0]
+        return (
+            TechniqueDetection(
+                GuitarTechnique.VIBRATO,
+                note,
+                0.86,
+            ),
+        )
+
+
 def _wav(path: Path, *, seconds: float, value: float) -> Path:
     sample_rate = 1000
     sf.write(
@@ -94,6 +107,23 @@ def test_direct_transcription_reuses_preloaded_audio(tmp_path):
     assert result.tracks[0].role is TrackRole.LEAD
     assert result.tracks[0].source_name == "original"
     assert progress[-1].stage == "complete"
+
+
+def test_transcription_maps_technique_candidates_into_root_and_track_tabs(tmp_path):
+    source = _wav(tmp_path / "source.wav", seconds=1.0, value=0.1)
+    service = TranscriptionService(
+        analyzer=_Analyzer(),
+        tab_generator=TabGenerator(),
+        technique_analyzer=_TechniqueAnalyzer(),
+    )
+
+    result = service.transcribe(source)
+
+    assert result.analysis.techniques[0].technique is GuitarTechnique.VIBRATO
+    assert result.tablature.events[0].technique == "vibrato"
+    assert result.tablature.events[0].technique_confidence == 0.86
+    assert result.tracks[0].analysis.techniques == result.analysis.techniques
+    assert result.tracks[0].tablature.events[0].technique == "vibrato"
 
 
 def test_separated_transcription_analyzes_guitar_stem(tmp_path):

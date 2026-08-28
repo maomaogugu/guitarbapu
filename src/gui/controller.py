@@ -247,6 +247,9 @@ class TabEditController:
             duration_beats=duration_beats,
             pitch_changed=pitch_changed,
         )
+        normalized_technique = (
+            technique.strip() if technique and technique.strip() else None
+        )
         updated = replace(
             event,
             string=string,
@@ -256,7 +259,12 @@ class TabEditController:
             note=note,
             start_beat=start_beat,
             duration_beats=duration_beats,
-            technique=technique.strip() if technique and technique.strip() else None,
+            technique=normalized_technique,
+            technique_confidence=(
+                event.technique_confidence
+                if normalized_technique == event.technique
+                else None
+            ),
             confidence=None if pitch_changed else event.confidence,
         )
         events = list(self.tablature.events)

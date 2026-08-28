@@ -9,6 +9,7 @@ import numpy as np
 from ..music.chord import Chord
 from ..music.note import Note
 from ..music.note_processor import NoteProcessor
+from ..music.technique import TechniqueDetection
 
 from .librosa_compat import import_librosa
 from .loader import AudioData
@@ -26,6 +27,7 @@ class AudioAnalysis:
     raw_notes: tuple[Note, ...] = field(default_factory=tuple)
     rhythm: RhythmAnalysis | None = None
     chords: tuple[Chord, ...] = field(default_factory=tuple)
+    techniques: tuple[TechniqueDetection, ...] = field(default_factory=tuple)
 
 
 class AudioAnalyzer:

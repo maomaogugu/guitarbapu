@@ -27,6 +27,7 @@ from src.gui.app import MainWindow
 from src.music.chord import Chord
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
+from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.timing import QuantizedNote, Rest, TimingInfo
 from src.music.track import TrackRole
 from src.project import TranscriptionTrack, load_project
@@ -121,6 +122,35 @@ def test_main_window_displays_cleaned_notes_and_tempo():
     assert "Tuning: E A D G B E" in text
     assert "Mapped: 1" in text
     assert "清理为 1 个音符" in window.status_label.text()
+    window.close()
+    app.processEvents()
+
+
+def test_main_window_displays_automatic_technique_confidence():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    analysis = _sample_analysis()
+    source = analysis.notes[0]
+    analysis = AudioAnalysis(
+        duration_seconds=analysis.duration_seconds,
+        sample_rate=analysis.sample_rate,
+        notes=analysis.notes,
+        raw_notes=analysis.raw_notes,
+        rhythm=analysis.rhythm,
+        techniques=(
+            TechniqueDetection(
+                GuitarTechnique.VIBRATO,
+                source,
+                0.84,
+            ),
+        ),
+    )
+
+    window._show_analysis(analysis)
+
+    assert window.event_table.item(0, 8).text() == "vibrato (84%)"
+    assert "技巧候选：1" in window.tab_output.toPlainText()
+    assert "技巧=vibrato(84%)" in window.tab_output.toPlainText()
     window.close()
     app.processEvents()
 

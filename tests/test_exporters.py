@@ -37,6 +37,8 @@ def _tablature():
                 duration=second.duration,
                 start_beat=1.0,
                 duration_beats=0.5,
+                technique="slide",
+                technique_confidence=0.82,
             ),
         ),
         tempo_bpm=90.0,
@@ -93,5 +95,6 @@ def test_musicxml_export_can_be_read_back_with_timing(tmp_path):
     assert xml.lstrip().startswith("<?xml")
     assert "<string>1</string>" in xml
     assert "<fret>0</fret>" in xml
+    assert "slide" in xml
     assert [item.pitch.midi for item in parsed_notes] == [64, 67]
     assert [float(item.duration.quarterLength) for item in parsed_notes] == [1.0, 0.5]

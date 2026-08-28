@@ -412,6 +412,7 @@ class MainWindow(QMainWindow):
             f"当前轨道：{track.name}；"
             f"{len(track.analysis.notes)} 个音符，"
             f"{len(track.analysis.chords)} 个和弦，"
+            f"{len(track.analysis.techniques)} 个技巧候选，"
             f"{len(controller.tablature.events)} 个 TAB 事件"
         )
 
@@ -702,6 +703,7 @@ class MainWindow(QMainWindow):
                 "relative_pitch_threshold": analyzer.relative_pitch_threshold,
                 "max_polyphony": analyzer.max_polyphony,
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
             }
         else:
@@ -714,6 +716,7 @@ class MainWindow(QMainWindow):
                 "hop_length": analyzer.hop_length,
                 "energy_threshold": analyzer.energy_threshold,
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
             }
         separator = None
@@ -899,6 +902,7 @@ class MainWindow(QMainWindow):
             )
         self.status_label.setText(
             summary
+            + f"；技巧候选 {len(analysis.techniques)} 个"
             + f"；TAB 映射 {len(tablature.events)} 个，"
             + f"未映射 {len(tablature.unmapped_notes)} 个"
         )
@@ -925,6 +929,7 @@ class MainWindow(QMainWindow):
             "TAB 事件详情",
             f"原始音符：{len(analysis.raw_notes)}  清理后：{len(analysis.notes)}",
             f"识别和弦：{len(analysis.chords)}",
+            f"技巧候选：{len(analysis.techniques)}",
             f"节拍：{tempo_text}",
             "",
         ]
@@ -949,7 +954,16 @@ class MainWindow(QMainWindow):
                 if event.confidence is not None
                 else ""
             )
-            technique = f" 技巧={event.technique}" if event.technique else ""
+            technique_confidence = (
+                f"({event.technique_confidence:.0%})"
+                if event.technique_confidence is not None
+                else ""
+            )
+            technique = (
+                f" 技巧={event.technique}{technique_confidence}"
+                if event.technique
+                else ""
+            )
             detail_lines.append(
                 f"{name:<4} MIDI={midi:<3} 弦={event.string} 品={event.fret:<2} "
                 f"拍={event.start_beat or 0.0:.2f} "
@@ -982,7 +996,12 @@ class MainWindow(QMainWindow):
                     f"{event.start_beat or 0.0:.3f}",
                     f"{event.duration_beats or 0.0:.3f}",
                     str(event.measure),
-                    event.technique or "",
+                    (
+                        f"{event.technique} ({event.technique_confidence:.0%})"
+                        if event.technique
+                        and event.technique_confidence is not None
+                        else event.technique or ""
+                    ),
                     (
                         f"{event.confidence:.0%}"
                         if event.confidence is not None

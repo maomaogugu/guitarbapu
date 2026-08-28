@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from threading import Event
 from typing import Protocol
@@ -22,6 +22,7 @@ from .separator import (
     Separator,
 )
 from .track_classifier import TrackClassifier
+from .technique_analyzer import TechniqueAnalyzer
 
 
 class Analyzer(Protocol):
@@ -49,11 +50,13 @@ class TranscriptionService:
         tab_generator: TabGenerator | None = None,
         separator: Separator | None = None,
         track_classifier: TrackClassifier | None = None,
+        technique_analyzer: TechniqueAnalyzer | None = None,
     ) -> None:
         self.analyzer = analyzer or AudioAnalyzer()
         self.tab_generator = tab_generator or TabGenerator()
         self.separator = separator
         self.track_classifier = track_classifier or TrackClassifier()
+        self.technique_analyzer = technique_analyzer or TechniqueAnalyzer()
 
     @staticmethod
     def _emit(
@@ -119,6 +122,22 @@ class TranscriptionService:
             "正在检测吉他音高和节奏…",
         )
         analysis = self.analyzer.analyze(analyzed_audio)
+        self._check_cancel(cancel_event)
+        self._emit(
+            progress_callback,
+            "detecting_techniques",
+            None,
+            "正在识别滑弦、击勾弦、推弦和颤音候选…",
+        )
+        pitch_hz = analysis.features.get("pitch_hz")
+        hop_length = getattr(self.analyzer, "hop_length", None)
+        techniques = self.technique_analyzer.detect(
+            analyzed_audio,
+            analysis.notes,
+            pitch_hz=pitch_hz,
+            pitch_hop_length=hop_length,
+        )
+        analysis = replace(analysis, techniques=techniques)
         self._check_cancel(cancel_event)
         self._emit(
             progress_callback,

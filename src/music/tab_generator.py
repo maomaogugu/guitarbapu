@@ -80,6 +80,9 @@ class TabGenerator:
             )
 
         groups = self._group_quantized(quantized)
+        technique_by_note = {
+            detection.note_key: detection for detection in analysis.techniques
+        }
         position_groups = self.optimizer.optimize_groups(
             tuple(tuple(item.note for item in group) for group in groups)
         )
@@ -89,6 +92,13 @@ class TabGenerator:
         maximum_beat = 0.0
         for group, positions in zip(groups, position_groups):
             for item, position in zip(group, positions):
+                technique = technique_by_note.get(
+                    (
+                        item.source.midi,
+                        round(item.source.start, 6),
+                        round(item.source.duration, 6),
+                    )
+                )
                 start_beat = item.start_beat
                 duration_beats = item.duration_beats
                 if start_beat is None:
@@ -124,6 +134,10 @@ class TabGenerator:
                         duration_beats=duration_beats,
                         measure=measure,
                         tie_to_next=item.tie_to_next or end_measure > measure,
+                        technique=(technique.technique.value if technique else None),
+                        technique_confidence=(
+                            technique.confidence if technique else None
+                        ),
                         confidence=item.source.confidence,
                     )
                 )

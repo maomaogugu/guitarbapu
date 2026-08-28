@@ -48,3 +48,26 @@ def test_renderer_shows_x_and_warning_for_unmapped_note():
     assert "x--" in rendered
     assert "警告：" in rendered
     assert "音符超出范围" in rendered
+
+
+def test_renderer_lists_detected_technique_with_confidence():
+    tab = Tablature(
+        events=(
+            TabEvent(
+                1,
+                3,
+                start=0.5,
+                note=Note(67),
+                start_beat=1.0,
+                duration_beats=1.0,
+                technique="slide",
+                technique_confidence=0.82,
+            ),
+        )
+    )
+
+    rendered = TextTabRenderer().render(tab)
+
+    assert "技巧候选（请试听确认）" in rendered
+    assert "slide" in rendered
+    assert "82%" in rendered
