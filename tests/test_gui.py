@@ -1,17 +1,22 @@
-"""Lightweight GUI checks for displaying Phase 4 analysis results."""
+"""Offscreen checks for the interactive desktop workflow."""
 
+from concurrent.futures import Future
 import os
 from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PyQt6.QtWidgets import QApplication, QFileDialog
+import numpy as np
+import soundfile as sf
+from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.audio.analyzer import AudioAnalysis
+from src.audio.loader import load_audio
 from src.audio.rhythm import RhythmAnalysis
 from src.gui.app import MainWindow
 from src.music.note import Note
 from src.music.timing import QuantizedNote, Rest, TimingInfo
+from src.project import load_project
 
 
 def _sample_analysis():
@@ -67,6 +72,8 @@ def test_result_actions_enable_only_after_analysis():
     assert all(not button.isEnabled() for button in buttons)
     window._show_analysis(_sample_analysis())
     assert all(button.isEnabled() for button in buttons)
+    assert window.event_table.rowCount() == 1
+    assert window.insert_event_button.isEnabled()
 
     window.close()
     app.processEvents()
@@ -127,5 +134,114 @@ def test_gui_text_export_adds_default_suffix(monkeypatch, tmp_path):
     assert output.exists()
     assert "Tuning: E A D G B E" in output.read_text(encoding="utf-8")
     assert "导出成功" in window.status_label.text()
+    window.close()
+    app.processEvents()
+
+
+def test_gui_edit_refreshes_table_and_supports_undo():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._show_analysis(_sample_analysis())
+    assert window.edit_controller is not None
+
+    index = window.edit_controller.change_pitch(0, 67)
+    window._edited(index, "测试修改")
+
+    assert window.event_table.item(index, 1).text() == "G4"
+    assert "G4" in window.tab_output.toPlainText()
+    assert "未保存" in window.status_label.text()
+    assert window.undo_button.isEnabled()
+
+    window._undo_edit()
+    assert window.event_table.item(0, 1).text() == "E4"
+    assert not window.edit_controller.dirty
+    window.close()
+    app.processEvents()
+
+
+def test_gui_safe_cancel_discards_completed_result():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    future = Future()
+    future.set_result(_sample_analysis())
+    window.analysis_future = future
+    window.analysis_cancel_requested = True
+    window.analysis_progress.setVisible(True)
+
+    window._poll_analysis()
+
+    assert window.analysis is None
+    assert window.analysis_future is None
+    assert window.status_label.text() == "分析已取消"
+    assert not window.analysis_progress.isVisible()
+    window.close()
+    app.processEvents()
+
+
+def test_gui_loads_waveform_and_enables_playback_for_audio(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    audio_path = tmp_path / "short.wav"
+    sf.write(audio_path, np.zeros(1000, dtype=np.float32), 1000)
+    window = MainWindow()
+
+    window_audio = load_audio(audio_path)
+    window._set_audio_source(audio_path, window_audio)
+
+    assert window_audio.duration == 1.0
+    assert window.waveform.duration == 1.0
+    assert window.audio_player.has_source
+    assert window.play_button.isEnabled()
+    window.close()
+    app.processEvents()
+
+
+def test_unsaved_prompt_honors_cancel_and_discard(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._show_analysis(_sample_analysis())
+    assert window.edit_controller is not None
+    window.edit_controller.change_pitch(0, 67)
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Cancel,
+    )
+    assert window._confirm_discard_changes() is False
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Discard,
+    )
+    assert window._confirm_discard_changes() is True
+    window.edit_controller.undo()
+    window.close()
+    app.processEvents()
+
+
+def test_edited_tablature_is_saved_while_analysis_source_is_preserved(
+    monkeypatch, tmp_path
+):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._show_analysis(_sample_analysis())
+    assert window.edit_controller is not None
+    index = window.edit_controller.change_pitch(0, 67)
+    window._edited(index, "修改")
+    project_path = tmp_path / "edited.guitarbapu.json"
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(project_path), ""),
+    )
+
+    assert window._save_project() is True
+    loaded = load_project(project_path)
+
+    assert loaded.analysis.notes[0].midi == 64
+    assert loaded.tablature.events[0].note is not None
+    assert loaded.tablature.events[0].note.midi == 67
+    assert window.edit_controller.dirty is False
     window.close()
     app.processEvents()

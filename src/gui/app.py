@@ -1,27 +1,33 @@
-"""Main window for the GuitarBapu desktop application.
-
-This module owns only presentation and user interaction. It calls the public
-audio services but does not contain decoding or pitch-analysis logic.
-"""
+"""Interactive desktop workflow for GuitarBapu transcription projects."""
 
 from __future__ import annotations
 
-from concurrent.futures import Future, ThreadPoolExecutor
-import sys
+from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from pathlib import Path
+import sys
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QCheckBox,
+    QDialog,
     QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSlider,
+    QSplitter,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -29,7 +35,11 @@ from PyQt6.QtWidgets import (
 from src.audio.analyzer import AudioAnalysis, AudioAnalyzer
 from src.audio.loader import AudioData, load_audio
 from src.exporters import export_midi, export_musicxml, export_text_tab
-from src.music.tab import Tablature
+from src.gui.audio_player import AudioPlayer, format_seconds
+from src.gui.controller import TabEditController, TabEditError
+from src.gui.event_editor import EventEditorDialog
+from src.gui.waveform import WaveformWidget
+from src.music.tab import TabEvent, Tablature
 from src.music.tab_generator import TabGenerator
 from src.music.tab_renderer import TextTabRenderer
 from src.project import (
@@ -41,9 +51,21 @@ from src.project import (
 
 
 class MainWindow(QMainWindow):
-    """Top-level window for importing and preparing an audio transcription."""
+    """Top-level import, analysis, playback, editing, and export workflow."""
 
     AUDIO_FILTER = "Audio files (*.mp3 *.wav *.flac)"
+    EVENT_HEADERS = (
+        "#",
+        "音符",
+        "MIDI",
+        "弦",
+        "品",
+        "开始拍",
+        "时值",
+        "小节",
+        "技巧",
+        "可信度",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -52,31 +74,34 @@ class MainWindow(QMainWindow):
         self.audio: AudioData | None = None
         self.analysis: AudioAnalysis | None = None
         self.tablature: Tablature | None = None
+        self.edit_controller: TabEditController | None = None
         self.analysis_parameters: dict[str, object] = {}
         self.analysis_executor = ThreadPoolExecutor(max_workers=1)
         self.analysis_future: Future | None = None
+        self.analysis_cancel_requested = False
         self.analysis_timer = QTimer(self)
         self.analysis_timer.setInterval(100)
         self.analysis_timer.timeout.connect(self._poll_analysis)
+        self.audio_player = AudioPlayer(self)
+        self._loop_selection: tuple[float, float] | None = None
         self._build_ui()
+        self._connect_playback()
 
     def _build_ui(self) -> None:
-        """Create the fixed skeleton UI and connect its controls."""
-
         self.setWindowTitle("GuitarBapu AI Transcriber")
-        self.setMinimumSize(640, 480)
+        self.setMinimumSize(900, 700)
 
         central_widget = QWidget(self)
         layout = QVBoxLayout(central_widget)
-        layout.setContentsMargins(24, 24, 24, 24)
-        layout.setSpacing(16)
+        layout.setContentsMargins(18, 18, 18, 18)
+        layout.setSpacing(10)
 
         title = QLabel("GuitarBapu AI Transcriber")
         title.setObjectName("titleLabel")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(title)
 
-        file_group = QGroupBox("音频文件")
+        file_group = QGroupBox("音频与项目")
         file_layout = QVBoxLayout(file_group)
         file_buttons = QHBoxLayout()
         self.import_button = QPushButton("导入音频")
@@ -86,22 +111,56 @@ class MainWindow(QMainWindow):
         self.open_project_button.clicked.connect(self._open_project)
         file_buttons.addWidget(self.open_project_button)
         file_layout.addLayout(file_buttons)
-
         self.file_label = QLabel("尚未选择音频文件")
         self.file_label.setObjectName("fileLabel")
         self.file_label.setFrameShape(QFrame.Shape.StyledPanel)
-        self.file_label.setMinimumHeight(36)
+        self.file_label.setMinimumHeight(34)
         self.file_label.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         self.file_label.setWordWrap(True)
         file_layout.addWidget(self.file_label)
         layout.addWidget(file_group)
 
+        playback_group = QGroupBox("音频播放与波形")
+        playback_layout = QVBoxLayout(playback_group)
+        playback_controls = QHBoxLayout()
+        self.play_button = QPushButton("播放")
+        self.play_button.clicked.connect(self.audio_player.toggle)
+        playback_controls.addWidget(self.play_button)
+        self.stop_button = QPushButton("停止")
+        self.stop_button.clicked.connect(self.audio_player.stop)
+        playback_controls.addWidget(self.stop_button)
+        self.loop_checkbox = QCheckBox("循环选区")
+        self.loop_checkbox.toggled.connect(self._loop_toggled)
+        playback_controls.addWidget(self.loop_checkbox)
+        self.position_slider = QSlider(Qt.Orientation.Horizontal)
+        self.position_slider.setRange(0, 0)
+        self.position_slider.sliderMoved.connect(
+            lambda value: self.audio_player.seek(value / 1000.0)
+        )
+        playback_controls.addWidget(self.position_slider, stretch=1)
+        self.time_label = QLabel("00:00.000 / 00:00.000")
+        playback_controls.addWidget(self.time_label)
+        playback_layout.addLayout(playback_controls)
+        self.waveform = WaveformWidget()
+        playback_layout.addWidget(self.waveform)
+        layout.addWidget(playback_group)
+
+        analysis_row = QHBoxLayout()
         self.analyze_button = QPushButton("开始分析")
         self.analyze_button.setEnabled(False)
         self.analyze_button.clicked.connect(self._start_analysis)
-        layout.addWidget(self.analyze_button)
+        analysis_row.addWidget(self.analyze_button)
+        self.cancel_analysis_button = QPushButton("取消分析")
+        self.cancel_analysis_button.setEnabled(False)
+        self.cancel_analysis_button.clicked.connect(self._cancel_analysis)
+        analysis_row.addWidget(self.cancel_analysis_button)
+        self.analysis_progress = QProgressBar()
+        self.analysis_progress.setRange(0, 0)
+        self.analysis_progress.setVisible(False)
+        analysis_row.addWidget(self.analysis_progress, stretch=1)
+        layout.addLayout(analysis_row)
 
-        status_group = QGroupBox("分析状态")
+        status_group = QGroupBox("状态")
         status_layout = QVBoxLayout(status_group)
         self.status_label = QLabel("等待导入音频")
         self.status_label.setWordWrap(True)
@@ -123,9 +182,9 @@ class MainWindow(QMainWindow):
         self.export_musicxml_button.clicked.connect(self._export_musicxml)
         export_layout.addWidget(self.export_musicxml_button)
         layout.addWidget(export_group)
-        self._set_result_actions_enabled(False)
 
-        tab_group = QGroupBox("六线谱 TAB 与音符详情")
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        tab_group = QGroupBox("六线谱 TAB 与事件详情")
         tab_layout = QVBoxLayout(tab_group)
         self.tab_output = QPlainTextEdit()
         self.tab_output.setReadOnly(True)
@@ -133,15 +192,67 @@ class MainWindow(QMainWindow):
         self.tab_output.setFont(
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         )
-        self.tab_output.setPlaceholderText("分析完成后，六线谱将在这里显示")
+        self.tab_output.setPlaceholderText("分析或打开项目后，六线谱将在这里显示")
         tab_layout.addWidget(self.tab_output)
-        layout.addWidget(tab_group, stretch=1)
+        splitter.addWidget(tab_group)
+
+        editor_group = QGroupBox("TAB 事件编辑")
+        editor_layout = QVBoxLayout(editor_group)
+        self.event_table = QTableWidget(0, len(self.EVENT_HEADERS))
+        self.event_table.setHorizontalHeaderLabels(self.EVENT_HEADERS)
+        self.event_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self.event_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
+        self.event_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
+        self.event_table.verticalHeader().setVisible(False)
+        self.event_table.horizontalHeader().setSectionResizeMode(
+            QHeaderView.ResizeMode.ResizeToContents
+        )
+        self.event_table.horizontalHeader().setStretchLastSection(True)
+        self.event_table.itemSelectionChanged.connect(
+            self._event_selection_changed
+        )
+        editor_layout.addWidget(self.event_table)
+        editor_buttons = QHBoxLayout()
+        self.insert_event_button = QPushButton("插入")
+        self.insert_event_button.clicked.connect(self._insert_event)
+        editor_buttons.addWidget(self.insert_event_button)
+        self.edit_event_button = QPushButton("编辑")
+        self.edit_event_button.clicked.connect(self._edit_event)
+        editor_buttons.addWidget(self.edit_event_button)
+        self.delete_event_button = QPushButton("删除")
+        self.delete_event_button.clicked.connect(self._delete_event)
+        editor_buttons.addWidget(self.delete_event_button)
+        self.undo_button = QPushButton("撤销")
+        self.undo_button.clicked.connect(self._undo_edit)
+        editor_buttons.addWidget(self.undo_button)
+        self.redo_button = QPushButton("重做")
+        self.redo_button.clicked.connect(self._redo_edit)
+        editor_buttons.addWidget(self.redo_button)
+        editor_layout.addLayout(editor_buttons)
+        splitter.addWidget(editor_group)
+        splitter.setSizes((360, 240))
+        layout.addWidget(splitter, stretch=1)
 
         self.setCentralWidget(central_widget)
+        self._set_result_actions_enabled(False)
+        self._set_playback_enabled(False)
+        self._update_editor_actions()
+
+    def _connect_playback(self) -> None:
+        self.audio_player.position_changed.connect(self._playback_position_changed)
+        self.audio_player.duration_changed.connect(self._playback_duration_changed)
+        self.audio_player.playing_changed.connect(self._playback_state_changed)
+        self.audio_player.error_occurred.connect(self._playback_error)
+        self.waveform.position_requested.connect(self.audio_player.seek)
+        self.waveform.selection_changed.connect(self._selection_changed)
 
     def _set_result_actions_enabled(self, enabled: bool) -> None:
-        """Enable save/export actions only when a result is available."""
-
         for button in (
             self.save_project_button,
             self.export_text_button,
@@ -150,17 +261,54 @@ class MainWindow(QMainWindow):
         ):
             button.setEnabled(enabled)
 
-    def _clear_result(self) -> None:
+    def _set_playback_enabled(self, enabled: bool) -> None:
+        for widget in (
+            self.play_button,
+            self.stop_button,
+            self.loop_checkbox,
+            self.position_slider,
+            self.waveform,
+        ):
+            widget.setEnabled(enabled)
+        if not enabled:
+            self.loop_checkbox.setChecked(False)
+
+    def _clear_result(self, *, keep_project_path: bool = False) -> None:
         self.analysis = None
         self.tablature = None
-        self.project_path = None
+        self.edit_controller = None
+        if not keep_project_path:
+            self.project_path = None
         self.analysis_parameters = {}
         self.tab_output.clear()
+        self.event_table.setRowCount(0)
+        self.waveform.set_event_times(())
         self._set_result_actions_enabled(False)
+        self._update_editor_actions()
+
+    def _clear_audio_view(self) -> None:
+        self.audio_player.set_source(None)
+        self.waveform.clear()
+        self.position_slider.setRange(0, 0)
+        self.time_label.setText("00:00.000 / 00:00.000")
+        self._set_playback_enabled(False)
+
+    def _set_audio_source(self, path: Path, audio: AudioData) -> None:
+        self.audio = audio
+        self.selected_file = path
+        self.waveform.set_audio(audio.waveform, audio.sample_rate)
+        self._playback_duration_changed(audio.duration)
+        try:
+            self.audio_player.set_source(path)
+        except FileNotFoundError as error:
+            self._set_playback_enabled(False)
+            self.status_label.setText(str(error))
+        else:
+            self._set_playback_enabled(True)
 
     def _choose_audio_file(self) -> None:
-        """Open a picker limited to the audio formats supported by the UI."""
-
+        if not self._confirm_discard_changes():
+            return
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "选择音频文件",
@@ -169,32 +317,27 @@ class MainWindow(QMainWindow):
         )
         if not file_name:
             return
-
-        self.selected_file = Path(file_name)
+        path = Path(file_name).resolve(strict=False)
         try:
-            audio = load_audio(self.selected_file)
+            audio = load_audio(path)
         except (OSError, ValueError, RuntimeError) as error:
-            self.selected_file = None
-            self.audio = None
-            self._clear_result()
-            self.file_label.setText("尚未选择音频文件")
             self.status_label.setText(f"音频读取失败：{error}")
-            self.analyze_button.setEnabled(False)
             return
 
-        self.audio = audio
+        self.audio_player.stop()
         self._clear_result()
+        self._set_audio_source(path, audio)
         self.file_label.setText(
-            f"文件名：{self.selected_file.name}\n"
+            f"文件名：{path.name}\n"
             f"时长：{audio.duration:.2f} 秒\n"
             f"采样率：{audio.sample_rate} Hz"
         )
-        self.status_label.setText("音频已导入，可以开始分析")
+        self.status_label.setText("音频已导入，可以播放或开始分析")
         self.analyze_button.setEnabled(True)
 
     def _open_project(self) -> None:
-        """Open a saved project without requiring the original audio file."""
-
+        if not self._confirm_discard_changes():
+            return
         file_name, _ = QFileDialog.getOpenFileName(
             self,
             "打开 GuitarBapu 项目",
@@ -209,40 +352,55 @@ class MainWindow(QMainWindow):
             self.status_label.setText(f"项目打开失败：{error}")
             return
 
+        self.audio_player.stop()
         self.project_path = Path(file_name).resolve(strict=False)
         self.selected_file = project.audio_path
-        self.audio = None
         self.analysis = project.analysis
         self.tablature = project.tablature
+        self.edit_controller = TabEditController(project.tablature)
         self.analysis_parameters = dict(project.analysis_parameters)
+
         audio_text = "未记录原音频"
+        self.audio = None
+        self._clear_audio_view()
         if project.audio_path is not None:
-            availability = "可用" if project.audio_path.exists() else "文件已移动或缺失"
-            audio_text = f"{project.audio_path}（{availability}）"
+            if project.audio_path.is_file():
+                try:
+                    audio = load_audio(project.audio_path)
+                except (OSError, ValueError, RuntimeError) as error:
+                    audio_text = f"{project.audio_path}（读取失败：{error}）"
+                else:
+                    self._set_audio_source(project.audio_path, audio)
+                    audio_text = f"{project.audio_path}（可用）"
+            else:
+                audio_text = f"{project.audio_path}（文件已移动或缺失）"
+
         self.file_label.setText(
             f"项目：{self.project_path.name}\n原音频：{audio_text}"
         )
-        self.analyze_button.setEnabled(False)
-        self._display_results(project.analysis, project.tablature)
-        self._set_result_actions_enabled(True)
+        self.analyze_button.setEnabled(self.audio is not None)
+        self._apply_tablature(project.tablature)
         self.status_label.setText(
-            f"项目已打开：{len(project.analysis.notes)} 个音符，"
+            f"项目已打开：{len(project.analysis.notes)} 个分析音符，"
             f"{len(project.tablature.events)} 个 TAB 事件"
         )
 
     def _start_analysis(self) -> None:
-        """Start the transcription pipeline in a worker thread."""
-
         if self.audio is None:
-            self.status_label.setText("请先导入音频文件")
+            self.status_label.setText("请先导入可用的音频文件")
             return
         if self.analysis_future is not None:
             return
+        if not self._confirm_discard_changes():
+            return
 
+        self.audio_player.pause()
         self.analyze_button.setEnabled(False)
         self.import_button.setEnabled(False)
         self.open_project_button.setEnabled(False)
-        self._clear_result()
+        self.cancel_analysis_button.setEnabled(True)
+        self.analysis_progress.setVisible(True)
+        self._clear_result(keep_project_path=True)
         self.status_label.setText("正在检测音高、清理音符并分析节奏，请稍候…")
         analyzer = AudioAnalyzer()
         self.analysis_parameters = {
@@ -253,10 +411,21 @@ class MainWindow(QMainWindow):
             "energy_threshold": analyzer.energy_threshold,
             "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
         }
+        self.analysis_cancel_requested = False
         self.analysis_future = self.analysis_executor.submit(
             analyzer.analyze, self.audio
         )
         self.analysis_timer.start()
+
+    def _cancel_analysis(self) -> None:
+        if self.analysis_future is None:
+            return
+        self.analysis_cancel_requested = True
+        self.analysis_future.cancel()
+        self.cancel_analysis_button.setEnabled(False)
+        self.status_label.setText(
+            "已请求取消；正在等待当前 librosa 计算安全结束…"
+        )
 
     def _poll_analysis(self) -> None:
         future = self.analysis_future
@@ -264,93 +433,309 @@ class MainWindow(QMainWindow):
             return
         self.analysis_timer.stop()
         try:
+            if self.analysis_cancel_requested or future.cancelled():
+                self.status_label.setText("分析已取消")
+                return
             analysis = future.result()
+        except CancelledError:
+            self.status_label.setText("分析已取消")
         except Exception as error:  # GUI boundary: report instead of crashing
-            self._show_analysis_error(str(error))
+            self.status_label.setText(f"分析失败：{error}")
         else:
             self._show_analysis(analysis)
         finally:
             self._analysis_finished()
 
-    def _show_analysis_error(self, error: str) -> None:
-        self.status_label.setText(f"分析失败：{error}")
-
     def _analysis_finished(self) -> None:
         self.analyze_button.setEnabled(self.audio is not None)
         self.import_button.setEnabled(True)
         self.open_project_button.setEnabled(True)
+        self.cancel_analysis_button.setEnabled(False)
+        self.analysis_progress.setVisible(False)
         self.analysis_future = None
+        self.analysis_cancel_requested = False
 
     def _show_analysis(self, analysis: AudioAnalysis) -> None:
-        """Render a completed AudioAnalysis without performing audio work."""
-
-        notes = analysis.notes
-
-        if not notes:
+        if not analysis.notes:
             self.status_label.setText("分析完成：未检测到可用的单音音符")
-            self.tab_output.setPlainText("未检测到音符。请尝试单音、较清晰的吉他录音。")
+            self.tab_output.setPlainText(
+                "未检测到音符。请尝试单音、较清晰的吉他录音。"
+            )
             return
-
         try:
             tablature = TabGenerator().generate(analysis)
         except (RuntimeError, ValueError) as error:
-            self._show_analysis_error(f"TAB 生成失败：{error}")
+            self.status_label.setText(f"分析失败：TAB 生成失败：{error}")
             return
         self.analysis = analysis
         self.tablature = tablature
-        self._display_results(analysis, tablature)
-        self._set_result_actions_enabled(True)
+        self.edit_controller = TabEditController(tablature)
+        self._apply_tablature(tablature)
         self.status_label.setText(
             f"分析完成：{len(analysis.raw_notes)} 个原始事件清理为 "
-            f"{len(notes)} 个音符；TAB 映射 {len(tablature.events)} 个，"
+            f"{len(analysis.notes)} 个音符；TAB 映射 {len(tablature.events)} 个，"
             f"未映射 {len(tablature.unmapped_notes)} 个"
         )
+
+    def _apply_tablature(
+        self, tablature: Tablature, *, selected_index: int | None = None
+    ) -> None:
+        self.tablature = tablature
+        if self.analysis is not None:
+            self._display_results(self.analysis, tablature)
+        self._refresh_event_table(selected_index=selected_index)
+        self.waveform.set_event_times(event.start for event in tablature.events)
+        self._set_result_actions_enabled(True)
+        self._update_editor_actions()
 
     def _display_results(
         self, analysis: AudioAnalysis, tablature: Tablature
     ) -> None:
-        """Display already computed data without rerunning any algorithm."""
-
         rendered_tab = TextTabRenderer().render(tablature)
-        notes = analysis.notes
-
         rhythm = analysis.rhythm
         tempo = rhythm.timing.tempo_bpm if rhythm is not None else None
         tempo_text = f"{tempo:.1f} BPM" if tempo is not None else "未检测到稳定 BPM"
         detail_lines = [
-            "音符详情",
-            f"原始音符：{len(analysis.raw_notes)}  清理后：{len(notes)}",
+            "TAB 事件详情",
+            f"原始音符：{len(analysis.raw_notes)}  清理后：{len(analysis.notes)}",
             f"节拍：{tempo_text}",
             "",
         ]
-        quantized = rhythm.quantized_notes if rhythm is not None else ()
-        if quantized:
-            for item in quantized:
-                note = item.note
-                beat_text = ""
-                if item.start_beat is not None and item.duration_beats is not None:
-                    beat_text = (
-                        f" 拍={item.start_beat:.2f} 时值={item.duration_beats:.2f}拍"
-                    )
-                confidence = (
-                    f" 可信度={item.source.confidence:.0%}"
-                    if item.source.confidence is not None
-                    else ""
-                )
-                detail_lines.append(
-                    f"{note.name:<4} MIDI={note.midi:<3} "
-                    f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
-                    f"{beat_text}{confidence}"
-                )
-        else:
-            detail_lines.extend(
-                f"{note.name:<4} MIDI={note.midi:<3} "
-                f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
-                for note in notes
+        for event in tablature.events:
+            midi = self._event_midi(event, tablature)
+            name = event.note.name if event.note is not None else f"MIDI {midi}"
+            confidence = (
+                f" 可信度={event.confidence:.0%}"
+                if event.confidence is not None
+                else ""
+            )
+            technique = f" 技巧={event.technique}" if event.technique else ""
+            detail_lines.append(
+                f"{name:<4} MIDI={midi:<3} 弦={event.string} 品={event.fret:<2} "
+                f"拍={event.start_beat or 0.0:.2f} "
+                f"时值={event.duration_beats or 0.0:.2f}拍"
+                f"{technique}{confidence}"
             )
         self.tab_output.setPlainText(
             rendered_tab + "\n\n" + "\n".join(detail_lines)
         )
+
+    @staticmethod
+    def _event_midi(event: TabEvent, tablature: Tablature) -> int:
+        if event.note is not None:
+            return event.note.midi
+        return tablature.guitar.midi_at(event.string, event.fret)
+
+    def _refresh_event_table(self, *, selected_index: int | None = None) -> None:
+        tablature = self.tablature
+        self.event_table.blockSignals(True)
+        self.event_table.setRowCount(0 if tablature is None else len(tablature.events))
+        if tablature is not None:
+            for row, event in enumerate(tablature.events):
+                midi = self._event_midi(event, tablature)
+                values = (
+                    str(row + 1),
+                    event.note.name if event.note is not None else str(midi),
+                    str(midi),
+                    str(event.string),
+                    str(event.fret),
+                    f"{event.start_beat or 0.0:.3f}",
+                    f"{event.duration_beats or 0.0:.3f}",
+                    str(event.measure),
+                    event.technique or "",
+                    (
+                        f"{event.confidence:.0%}"
+                        if event.confidence is not None
+                        else ""
+                    ),
+                )
+                for column, value in enumerate(values):
+                    self.event_table.setItem(row, column, QTableWidgetItem(value))
+        self.event_table.blockSignals(False)
+        if (
+            selected_index is not None
+            and tablature is not None
+            and 0 <= selected_index < len(tablature.events)
+        ):
+            self.event_table.selectRow(selected_index)
+        else:
+            self.event_table.clearSelection()
+        self._update_editor_actions()
+
+    def _selected_event_index(self) -> int | None:
+        rows = self.event_table.selectionModel().selectedRows()
+        return rows[0].row() if rows else None
+
+    def _event_selection_changed(self) -> None:
+        self._update_editor_actions()
+        index = self._selected_event_index()
+        if index is None or self.tablature is None:
+            return
+        event = self.tablature.events[index]
+        self.audio_player.seek(event.start)
+        end = event.start + max(event.duration, 0.01)
+        if self.waveform.duration > 0:
+            self.waveform.set_selection(event.start, end)
+
+    def _update_editor_actions(self) -> None:
+        has_controller = self.edit_controller is not None
+        has_selection = self._selected_event_index() is not None
+        self.insert_event_button.setEnabled(has_controller)
+        self.edit_event_button.setEnabled(has_controller and has_selection)
+        self.delete_event_button.setEnabled(has_controller and has_selection)
+        self.undo_button.setEnabled(
+            has_controller and bool(self.edit_controller and self.edit_controller.can_undo)
+        )
+        self.redo_button.setEnabled(
+            has_controller and bool(self.edit_controller and self.edit_controller.can_redo)
+        )
+
+    def _insert_event(self) -> None:
+        controller = self.edit_controller
+        if controller is None:
+            return
+        selected = self._selected_event_index()
+        if selected is not None:
+            event = controller.tablature.events[selected]
+            default_midi = self._event_midi(event, controller.tablature)
+            default_start = (event.start_beat or 0.0) + (
+                event.duration_beats or 0.0
+            )
+        elif controller.tablature.events:
+            event = controller.tablature.events[-1]
+            default_midi = self._event_midi(event, controller.tablature)
+            default_start = (event.start_beat or 0.0) + (
+                event.duration_beats or 0.0
+            )
+        else:
+            default_midi = 64
+            default_start = 0.0
+        dialog = EventEditorDialog(
+            controller.tablature,
+            default_midi=default_midi,
+            default_start_beat=default_start,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            index = controller.insert_event(
+                midi=values.midi,
+                position=values.position,
+                start_beat=values.start_beat,
+                duration_beats=values.duration_beats,
+                technique=values.technique,
+            )
+        except TabEditError as error:
+            self.status_label.setText(f"插入失败：{error}")
+            return
+        self._edited(index, "已插入 TAB 事件")
+
+    def _edit_event(self) -> None:
+        controller = self.edit_controller
+        index = self._selected_event_index()
+        if controller is None or index is None:
+            return
+        event = controller.tablature.events[index]
+        dialog = EventEditorDialog(
+            controller.tablature,
+            event=event,
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        values = dialog.values()
+        try:
+            new_index = controller.update_event(
+                index,
+                midi=values.midi,
+                string=values.position.string,
+                fret=values.position.fret,
+                start_beat=values.start_beat,
+                duration_beats=values.duration_beats,
+                technique=values.technique,
+            )
+        except TabEditError as error:
+            self.status_label.setText(f"编辑失败：{error}")
+            return
+        self._edited(new_index, "TAB 事件已修改")
+
+    def _delete_event(self) -> None:
+        controller = self.edit_controller
+        index = self._selected_event_index()
+        if controller is None or index is None:
+            return
+        controller.delete_event(index)
+        next_index = min(index, len(controller.tablature.events) - 1)
+        self._edited(
+            next_index if next_index >= 0 else None,
+            "TAB 事件已删除，可撤销",
+        )
+
+    def _undo_edit(self) -> None:
+        if self.edit_controller is None:
+            return
+        self.edit_controller.undo()
+        self._edited(None, "已撤销")
+
+    def _redo_edit(self) -> None:
+        if self.edit_controller is None:
+            return
+        self.edit_controller.redo()
+        self._edited(None, "已重做")
+
+    def _edited(self, selected_index: int | None, message: str) -> None:
+        if self.edit_controller is None:
+            return
+        self._apply_tablature(
+            self.edit_controller.tablature,
+            selected_index=selected_index,
+        )
+        dirty_text = "（未保存）" if self.edit_controller.dirty else ""
+        self.status_label.setText(message + dirty_text)
+
+    def _playback_position_changed(self, seconds: float) -> None:
+        if (
+            self.loop_checkbox.isChecked()
+            and self._loop_selection is not None
+            and self.audio_player.is_playing
+        ):
+            start, end = self._loop_selection
+            if end - start >= 0.02 and seconds >= end - 0.01:
+                self.audio_player.seek(start)
+                return
+        self.position_slider.setValue(round(seconds * 1000))
+        self.waveform.set_cursor(seconds)
+        self.time_label.setText(
+            f"{format_seconds(seconds)} / {format_seconds(self.waveform.duration)}"
+        )
+
+    def _playback_duration_changed(self, seconds: float) -> None:
+        duration = max(0.0, float(seconds), self.waveform.duration)
+        self.position_slider.setRange(0, round(duration * 1000))
+        self.time_label.setText(
+            f"{format_seconds(self.audio_player.position)} / {format_seconds(duration)}"
+        )
+
+    def _playback_state_changed(self, playing: bool) -> None:
+        self.play_button.setText("暂停" if playing else "播放")
+
+    def _playback_error(self, error: str) -> None:
+        self.status_label.setText(f"音频播放失败：{error}")
+
+    def _selection_changed(self, start: float, end: float) -> None:
+        self._loop_selection = (start, end) if end - start >= 0.02 else None
+
+    def _loop_toggled(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        if self._loop_selection is None:
+            self.loop_checkbox.setChecked(False)
+            self.status_label.setText("请先在波形上拖动，或选择一个 TAB 事件")
+            return
+        start, _ = self._loop_selection
+        self.audio_player.seek(start)
 
     def _default_export_name(self, suffix: str) -> str:
         if self.project_path is not None:
@@ -372,10 +757,10 @@ class MainWindow(QMainWindow):
             target = target.with_name(target.name + default)
         return target
 
-    def _save_project(self) -> None:
+    def _save_project(self) -> bool:
         if self.analysis is None or self.tablature is None:
             self.status_label.setText("没有可以保存的分析结果")
-            return
+            return False
         default_name = (
             str(self.project_path)
             if self.project_path is not None
@@ -388,7 +773,7 @@ class MainWindow(QMainWindow):
             "GuitarBapu project (*.guitarbapu.json *.json)",
         )
         if not file_name:
-            return
+            return False
         target = self._with_suffix(file_name, (".json",), ".guitarbapu.json")
         project = TranscriptionProject(
             audio_path=self.selected_file,
@@ -400,8 +785,12 @@ class MainWindow(QMainWindow):
             self.project_path = save_project(project, target)
         except (OSError, TypeError, ValueError) as error:
             self.status_label.setText(f"项目保存失败：{error}")
-            return
+            return False
+        if self.edit_controller is not None:
+            self.edit_controller.mark_saved()
+        self._update_editor_actions()
         self.status_label.setText(f"项目已保存：{self.project_path}")
+        return True
 
     def _export_result(
         self,
@@ -458,17 +847,36 @@ class MainWindow(QMainWindow):
             exporter=export_musicxml,
         )
 
-    def closeEvent(self, event) -> None:
-        """Stop polling and release the background executor on window close."""
+    def _confirm_discard_changes(self) -> bool:
+        if self.edit_controller is None or not self.edit_controller.dirty:
+            return True
+        choice = QMessageBox.warning(
+            self,
+            "未保存的修改",
+            "当前 TAB 有未保存的修改。是否先保存项目？",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Save:
+            return self._save_project()
+        return choice == QMessageBox.StandardButton.Discard
 
+    def closeEvent(self, event) -> None:
+        if not self._confirm_discard_changes():
+            event.ignore()
+            return
         self.analysis_timer.stop()
+        self.analysis_cancel_requested = True
+        if self.analysis_future is not None:
+            self.analysis_future.cancel()
+        self.audio_player.stop()
         self.analysis_executor.shutdown(wait=False, cancel_futures=True)
         super().closeEvent(event)
 
 
 def main() -> int:
-    """Create the Qt application and run the event loop."""
-
     app = QApplication.instance() or QApplication(sys.argv)
     window = MainWindow()
     window.show()
