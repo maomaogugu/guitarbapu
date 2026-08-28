@@ -9,6 +9,7 @@ from typing import Protocol
 
 from src.music.tab import Tablature
 from src.music.tab_generator import TabGenerator
+from src.project.track import TranscriptionTrack
 
 from .analyzer import AudioAnalysis, AudioAnalyzer
 from .loader import AudioData, load_audio
@@ -20,6 +21,7 @@ from .separator import (
     SeparationResult,
     Separator,
 )
+from .track_classifier import TrackClassifier
 
 
 class Analyzer(Protocol):
@@ -34,6 +36,7 @@ class TranscriptionResult:
     analysis: AudioAnalysis
     tablature: Tablature
     separation: SeparationResult | None = None
+    tracks: tuple[TranscriptionTrack, ...] = ()
 
 
 class TranscriptionService:
@@ -45,10 +48,12 @@ class TranscriptionService:
         analyzer: Analyzer | None = None,
         tab_generator: TabGenerator | None = None,
         separator: Separator | None = None,
+        track_classifier: TrackClassifier | None = None,
     ) -> None:
         self.analyzer = analyzer or AudioAnalyzer()
         self.tab_generator = tab_generator or TabGenerator()
         self.separator = separator
+        self.track_classifier = track_classifier or TrackClassifier()
 
     @staticmethod
     def _emit(
@@ -122,6 +127,24 @@ class TranscriptionService:
             "正在生成六线谱…",
         )
         tablature = self.tab_generator.generate(analysis)
+        source_name = "guitar" if separation is not None else "original"
+        tracks = tuple(
+            TranscriptionTrack(
+                track_id=f"logical-{candidate.role.value}",
+                name=candidate.name,
+                role=candidate.role,
+                analysis=candidate.analysis,
+                tablature=self.tab_generator.generate(candidate.analysis),
+                source_name=source_name,
+                confidence=candidate.confidence,
+                metadata={
+                    "logical": True,
+                    "classifier": "structural-v1",
+                    "independent_audio": False,
+                },
+            )
+            for candidate in self.track_classifier.classify(analysis)
+        )
         self._emit(progress_callback, "complete", 1.0, "转录完成")
         return TranscriptionResult(
             source_audio_path=source,
@@ -129,6 +152,7 @@ class TranscriptionService:
             analysis=analysis,
             tablature=tablature,
             separation=separation,
+            tracks=tracks,
         )
 
 

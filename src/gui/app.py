@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
+from dataclasses import replace
 from pathlib import Path
 import sys
 from threading import Event
@@ -57,9 +58,11 @@ from src.gui.waveform import WaveformWidget
 from src.music.tab import TabEvent, Tablature
 from src.music.tab_generator import TabGenerator
 from src.music.tab_renderer import TextTabRenderer
+from src.music.track import TrackRole
 from src.project import (
     ProjectFormatError,
     TranscriptionProject,
+    TranscriptionTrack,
     load_project,
     save_project,
 )
@@ -90,6 +93,12 @@ class MainWindow(QMainWindow):
         self.analysis: AudioAnalysis | None = None
         self.tablature: Tablature | None = None
         self.edit_controller: TabEditController | None = None
+        self.master_analysis: AudioAnalysis | None = None
+        self.master_tablature: Tablature | None = None
+        self.tracks: dict[str, TranscriptionTrack] = {}
+        self.track_controllers: dict[str, TabEditController] = {}
+        self.active_track_id: str | None = None
+        self.track_metadata_dirty = False
         self.analysis_parameters: dict[str, object] = {}
         self.analysis_executor = ThreadPoolExecutor(max_workers=1)
         self.analysis_future: Future | None = None
@@ -216,6 +225,26 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
 
+        track_group = QGroupBox("逻辑轨道")
+        track_layout = QHBoxLayout(track_group)
+        track_layout.addWidget(QLabel("当前轨道："))
+        self.track_combo = QComboBox()
+        self.track_combo.setMinimumWidth(180)
+        self.track_combo.currentIndexChanged.connect(self._track_selected)
+        track_layout.addWidget(self.track_combo)
+        track_layout.addWidget(QLabel("角色："))
+        self.track_role_combo = QComboBox()
+        for role in TrackRole:
+            self.track_role_combo.addItem(role.display_name, role.value)
+        self.track_role_combo.currentIndexChanged.connect(
+            self._track_role_changed
+        )
+        track_layout.addWidget(self.track_role_combo)
+        self.track_info_label = QLabel("当前是单轨项目")
+        self.track_info_label.setWordWrap(True)
+        track_layout.addWidget(self.track_info_label, stretch=1)
+        layout.addWidget(track_group)
+
         export_group = QGroupBox("项目保存与导出")
         export_layout = QHBoxLayout(export_group)
         self.save_project_button = QPushButton("保存项目")
@@ -289,6 +318,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(splitter, stretch=1)
 
         self.setCentralWidget(central_widget)
+        self._set_track_controls_enabled(False)
         self._set_result_actions_enabled(False)
         self._set_playback_enabled(False)
         self._update_editor_actions()
@@ -310,6 +340,133 @@ class MainWindow(QMainWindow):
         ):
             button.setEnabled(enabled)
 
+    def _set_track_controls_enabled(self, enabled: bool) -> None:
+        self.track_combo.setEnabled(enabled)
+        self.track_role_combo.setEnabled(enabled)
+
+    @staticmethod
+    def _track_label(track: TranscriptionTrack) -> str:
+        confidence = (
+            f" · {track.confidence:.0%}" if track.confidence is not None else ""
+        )
+        return f"{track.name}{confidence}"
+
+    def _set_tracks(
+        self,
+        tracks: tuple[TranscriptionTrack, ...],
+        *,
+        selected_track_id: str | None = None,
+    ) -> None:
+        self.tracks = {track.track_id: track for track in tracks}
+        self.track_metadata_dirty = False
+        self.track_controllers = {
+            track.track_id: TabEditController(track.tablature) for track in tracks
+        }
+        self.track_combo.blockSignals(True)
+        self.track_combo.clear()
+        for track in tracks:
+            self.track_combo.addItem(self._track_label(track), track.track_id)
+        track_id = selected_track_id
+        if track_id not in self.tracks:
+            track_id = tracks[0].track_id if tracks else None
+        if track_id is not None:
+            self.track_combo.setCurrentIndex(self.track_combo.findData(track_id))
+        self.track_combo.blockSignals(False)
+        self._set_track_controls_enabled(bool(tracks))
+        if track_id is not None:
+            self._activate_track(track_id)
+
+    def _track_selected(self, index: int) -> None:
+        if index < 0:
+            return
+        track_id = self.track_combo.itemData(index)
+        if isinstance(track_id, str):
+            self._activate_track(track_id)
+
+    def _activate_track(self, track_id: str) -> None:
+        track = self.tracks.get(track_id)
+        controller = self.track_controllers.get(track_id)
+        if track is None or controller is None:
+            return
+        self.active_track_id = track_id
+        self.analysis = track.analysis
+        self.edit_controller = controller
+        self.tablature = controller.tablature
+        role_index = self.track_role_combo.findData(track.role.value)
+        self.track_role_combo.blockSignals(True)
+        if role_index >= 0:
+            self.track_role_combo.setCurrentIndex(role_index)
+        self.track_role_combo.blockSignals(False)
+        source_text = "吉他分离轨" if track.source_name == "guitar" else "原音频"
+        confidence = (
+            f"，分类可信度 {track.confidence:.0%}"
+            if track.confidence is not None
+            else ""
+        )
+        self.track_info_label.setText(
+            f"{track.role.display_name}，来源：{source_text}{confidence}；"
+            "这是共享同一音频的逻辑事件轨，不是独立音频 stem"
+        )
+        self._apply_tablature(controller.tablature)
+        self.status_label.setText(
+            f"当前轨道：{track.name}；"
+            f"{len(track.analysis.notes)} 个音符，"
+            f"{len(track.analysis.chords)} 个和弦，"
+            f"{len(controller.tablature.events)} 个 TAB 事件"
+        )
+
+    def _track_role_changed(self, index: int) -> None:
+        if index < 0 or self.active_track_id is None:
+            return
+        track = self.tracks.get(self.active_track_id)
+        value = self.track_role_combo.itemData(index)
+        if track is None or not isinstance(value, str):
+            return
+        role = TrackRole(value)
+        if role is track.role:
+            return
+        updated = replace(track, name=role.display_name, role=role)
+        self.tracks[updated.track_id] = updated
+        self.track_metadata_dirty = True
+        combo_index = self.track_combo.findData(updated.track_id)
+        if combo_index >= 0:
+            self.track_combo.setItemText(combo_index, self._track_label(updated))
+        self.track_info_label.setText(
+            f"轨道角色已改为 {role.display_name}（未保存）；"
+            "仍是共享音频的逻辑轨道"
+        )
+
+    def _current_tracks(self) -> tuple[TranscriptionTrack, ...]:
+        return tuple(
+            replace(
+                track,
+                tablature=self.track_controllers[track_id].tablature,
+            )
+            for track_id, track in self.tracks.items()
+        )
+
+    def _dirty_controllers(self) -> tuple[TabEditController, ...]:
+        if self.track_controllers:
+            return tuple(
+                controller
+                for controller in self.track_controllers.values()
+                if controller.dirty
+            )
+        if self.edit_controller is not None and self.edit_controller.dirty:
+            return (self.edit_controller,)
+        return ()
+
+    def _reset_tracks(self) -> None:
+        self.tracks = {}
+        self.track_controllers = {}
+        self.active_track_id = None
+        self.track_metadata_dirty = False
+        self.track_combo.blockSignals(True)
+        self.track_combo.clear()
+        self.track_combo.blockSignals(False)
+        self.track_info_label.setText("当前是单轨项目")
+        self._set_track_controls_enabled(False)
+
     def _set_playback_enabled(self, enabled: bool) -> None:
         for widget in (
             self.play_button,
@@ -327,6 +484,9 @@ class MainWindow(QMainWindow):
         self.analysis = None
         self.tablature = None
         self.edit_controller = None
+        self.master_analysis = None
+        self.master_tablature = None
+        self._reset_tracks()
         self.last_separation_result = None
         if not keep_project_path:
             self.project_path = None
@@ -438,11 +598,11 @@ class MainWindow(QMainWindow):
             return
 
         self.audio_player.stop()
+        self._clear_result()
         self.project_path = Path(file_name).resolve(strict=False)
         self.selected_file = project.audio_path
-        self.analysis = project.analysis
-        self.tablature = project.tablature
-        self.edit_controller = TabEditController(project.tablature)
+        self.master_analysis = project.analysis
+        self.master_tablature = project.tablature
         self.analysis_parameters = dict(project.analysis_parameters)
         analysis_mode = str(
             self.analysis_parameters.get("analysis_mode", "monophonic")
@@ -476,11 +636,22 @@ class MainWindow(QMainWindow):
             f"项目：{self.project_path.name}\n原音频：{audio_text}"
         )
         self.analyze_button.setEnabled(self.audio is not None)
-        self._apply_tablature(project.tablature)
+        if project.tracks:
+            self._set_tracks(
+                project.tracks,
+                selected_track_id=project.active_track_id,
+            )
+        else:
+            self.analysis = project.analysis
+            self.tablature = project.tablature
+            self.edit_controller = TabEditController(project.tablature)
+            self._reset_tracks()
+            self._apply_tablature(project.tablature)
         self.status_label.setText(
             f"项目已打开：{len(project.analysis.notes)} 个分析音符，"
             f"{len(project.analysis.chords)} 个和弦，"
-            f"{len(project.tablature.events)} 个 TAB 事件"
+            f"{len(project.tracks)} 条逻辑轨道，"
+            f"{len(project.tablature.events)} 个总 TAB 事件"
         )
 
     def _start_analysis(self) -> None:
@@ -629,7 +800,12 @@ class MainWindow(QMainWindow):
 
     def _show_transcription_result(self, result: TranscriptionResult) -> None:
         self.last_separation_result = result.separation
-        self._show_analysis(result.analysis, tablature=result.tablature)
+        self.master_analysis = result.analysis
+        self.master_tablature = result.tablature
+        if result.tracks:
+            self._set_tracks(result.tracks)
+        else:
+            self._show_analysis(result.analysis, tablature=result.tablature)
         if result.separation is None:
             return
         separation = result.separation
@@ -689,7 +865,10 @@ class MainWindow(QMainWindow):
         *,
         tablature: Tablature | None = None,
     ) -> None:
+        self.master_analysis = analysis
         if not analysis.notes:
+            self.master_tablature = tablature
+            self._reset_tracks()
             self.status_label.setText("分析完成：未检测到可用的音符")
             self.tab_output.setPlainText(
                 "未检测到音符。请尝试较清晰的吉他录音，"
@@ -702,6 +881,8 @@ class MainWindow(QMainWindow):
             except (RuntimeError, ValueError) as error:
                 self.status_label.setText(f"分析失败：TAB 生成失败：{error}")
                 return
+        self.master_tablature = tablature
+        self._reset_tracks()
         self.analysis = analysis
         self.tablature = tablature
         self.edit_controller = TabEditController(tablature)
@@ -1009,6 +1190,12 @@ class MainWindow(QMainWindow):
             name = "transcription"
         return name + suffix
 
+    def _track_export_suffix(self, suffix: str) -> str:
+        track = self.tracks.get(self.active_track_id or "")
+        if track is None:
+            return suffix
+        return f"-{track.role.value}{suffix}"
+
     @staticmethod
     def _with_suffix(path: str, suffixes: tuple[str, ...], default: str) -> Path:
         target = Path(path).expanduser()
@@ -1034,19 +1221,33 @@ class MainWindow(QMainWindow):
         if not file_name:
             return False
         target = self._with_suffix(file_name, (".json",), ".guitarbapu.json")
+        current_tracks = self._current_tracks()
+        if current_tracks:
+            project_analysis = self.master_analysis or self.analysis
+            project_tablature = self.master_tablature or self.tablature
+        else:
+            project_analysis = self.analysis
+            project_tablature = self.tablature
         project = TranscriptionProject(
             audio_path=self.selected_file,
-            analysis=self.analysis,
-            tablature=self.tablature,
+            analysis=project_analysis,
+            tablature=project_tablature,
             analysis_parameters=self.analysis_parameters,
+            tracks=current_tracks,
+            active_track_id=self.active_track_id,
         )
         try:
             self.project_path = save_project(project, target)
         except (OSError, TypeError, ValueError) as error:
             self.status_label.setText(f"项目保存失败：{error}")
             return False
-        if self.edit_controller is not None:
+        if current_tracks:
+            self.tracks = {track.track_id: track for track in current_tracks}
+            for controller in self.track_controllers.values():
+                controller.mark_saved()
+        elif self.edit_controller is not None:
             self.edit_controller.mark_saved()
+        self.track_metadata_dirty = False
         self._update_editor_actions()
         self.status_label.setText(f"项目已保存：{self.project_path}")
         return True
@@ -1066,7 +1267,7 @@ class MainWindow(QMainWindow):
         file_name, _ = QFileDialog.getSaveFileName(
             self,
             title,
-            self._default_export_name(default_suffix),
+            self._default_export_name(self._track_export_suffix(default_suffix)),
             file_filter,
         )
         if not file_name:
@@ -1077,7 +1278,9 @@ class MainWindow(QMainWindow):
         except Exception as error:  # GUI boundary: third-party exporters vary
             self.status_label.setText(f"导出失败：{error}")
             return
-        self.status_label.setText(f"导出成功：{exported}")
+        track = self.tracks.get(self.active_track_id or "")
+        track_text = f"当前轨道“{track.name}”" if track is not None else "当前 TAB"
+        self.status_label.setText(f"导出成功（{track_text}）：{exported}")
 
     def _export_text(self) -> None:
         self._export_result(
@@ -1107,12 +1310,13 @@ class MainWindow(QMainWindow):
         )
 
     def _confirm_discard_changes(self) -> bool:
-        if self.edit_controller is None or not self.edit_controller.dirty:
+        if not self._dirty_controllers() and not self.track_metadata_dirty:
             return True
         choice = QMessageBox.warning(
             self,
             "未保存的修改",
-            "当前 TAB 有未保存的修改。是否先保存项目？",
+            "当前 TAB 或逻辑轨道有未保存的修改。"
+            "是否先保存项目？",
             QMessageBox.StandardButton.Save
             | QMessageBox.StandardButton.Discard
             | QMessageBox.StandardButton.Cancel,

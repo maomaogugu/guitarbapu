@@ -12,9 +12,11 @@ from src.music.guitar import Guitar
 from src.music.note import Note
 from src.music.tab import TabEvent, TabRest, Tablature, UnmappedNote
 from src.music.timing import QuantizedNote, Rest, TimingInfo
+from src.music.track import TrackRole
 from src.project import (
     CURRENT_SCHEMA_VERSION,
     ProjectFormatError,
+    TranscriptionTrack,
     TranscriptionProject,
     load_project,
     save_project,
@@ -125,12 +127,64 @@ def test_project_without_chords_field_remains_backward_compatible(tmp_path):
     save_project(_project(None), project_path)
     payload = json.loads(project_path.read_text(encoding="utf-8"))
     payload["analysis"].pop("chords")
+    payload.pop("tracks")
+    payload.pop("active_track_id")
     project_path.write_text(json.dumps(payload), encoding="utf-8")
 
     loaded = load_project(project_path)
 
     assert loaded.analysis.chords == ()
     assert loaded.analysis.notes
+
+
+def test_project_round_trip_preserves_logical_tracks(tmp_path):
+    base = _project(None)
+    track = TranscriptionTrack(
+        track_id="rhythm",
+        name="节奏候选",
+        role=TrackRole.RHYTHM,
+        analysis=base.analysis,
+        tablature=base.tablature,
+        source_name="guitar",
+        confidence=0.82,
+        metadata={"logical": True},
+    )
+    project = TranscriptionProject(
+        analysis=base.analysis,
+        tablature=base.tablature,
+        tracks=(track,),
+        active_track_id="rhythm",
+    )
+    project_path = tmp_path / "multi-track.guitarbapu.json"
+
+    save_project(project, project_path)
+    loaded = load_project(project_path)
+
+    assert loaded.active_track_id == "rhythm"
+    assert loaded.active_track is not None
+    assert loaded.active_track.track_id == track.track_id
+    assert loaded.active_track.analysis.notes == track.analysis.notes
+    assert loaded.active_track.tablature == track.tablature
+    assert loaded.tracks[0].role is TrackRole.RHYTHM
+    assert loaded.tracks[0].metadata["logical"] is True
+
+
+def test_project_rejects_duplicate_track_ids():
+    base = _project(None)
+    track = TranscriptionTrack(
+        track_id="same",
+        name="Track",
+        role=TrackRole.UNKNOWN,
+        analysis=base.analysis,
+        tablature=base.tablature,
+    )
+
+    with pytest.raises(ValueError, match="unique"):
+        TranscriptionProject(
+            analysis=base.analysis,
+            tablature=base.tablature,
+            tracks=(track, track),
+        )
 
 
 def test_project_rejects_unknown_schema_version(tmp_path):

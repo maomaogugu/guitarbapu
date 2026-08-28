@@ -14,7 +14,9 @@ from ..music.guitar import Guitar, GuitarString
 from ..music.note import Note
 from ..music.tab import TabEvent, TabRest, Tablature, UnmappedNote
 from ..music.timing import QuantizedNote, Rest, TimingInfo
+from ..music.track import TrackRole
 from .model import TranscriptionProject
+from .track import TranscriptionTrack
 
 
 PROJECT_FORMAT = "guitarbapu-project"
@@ -185,6 +187,32 @@ def _rhythm_from_dict(data: Mapping[str, Any] | None) -> RhythmAnalysis | None:
     )
 
 
+def _analysis_to_dict(analysis: AudioAnalysis) -> dict[str, Any]:
+    return {
+        "duration_seconds": analysis.duration_seconds,
+        "sample_rate": analysis.sample_rate,
+        "notes": [_note_to_dict(note) for note in analysis.notes],
+        "raw_notes": [_note_to_dict(note) for note in analysis.raw_notes],
+        "chords": [_chord_to_dict(chord) for chord in analysis.chords],
+        "rhythm": _rhythm_to_dict(analysis.rhythm),
+    }
+
+
+def _analysis_from_dict(data: Mapping[str, Any]) -> AudioAnalysis:
+    return AudioAnalysis(
+        duration_seconds=float(data["duration_seconds"]),
+        sample_rate=int(data["sample_rate"]),
+        # Large frame-level arrays are intentionally not persisted.
+        features={},
+        notes=tuple(_note_from_dict(item) for item in data.get("notes", ())),
+        raw_notes=tuple(
+            _note_from_dict(item) for item in data.get("raw_notes", ())
+        ),
+        rhythm=_rhythm_from_dict(data.get("rhythm")),
+        chords=tuple(_chord_from_dict(item) for item in data.get("chords", ())),
+    )
+
+
 def _guitar_to_dict(guitar: Guitar) -> dict[str, Any]:
     return {
         "fret_count": guitar.fret_count,
@@ -337,6 +365,42 @@ def _tablature_from_dict(data: Mapping[str, Any]) -> Tablature:
     )
 
 
+def _track_to_dict(track: TranscriptionTrack) -> dict[str, Any]:
+    metadata = dict(track.metadata)
+    try:
+        json.dumps(metadata)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("track metadata must contain JSON values") from exc
+    return {
+        "track_id": track.track_id,
+        "name": track.name,
+        "role": track.role.value,
+        "source_name": track.source_name,
+        "confidence": track.confidence,
+        "metadata": metadata,
+        "analysis": _analysis_to_dict(track.analysis),
+        "tablature": _tablature_to_dict(track.tablature),
+    }
+
+
+def _track_from_dict(data: Mapping[str, Any]) -> TranscriptionTrack:
+    metadata = data.get("metadata", {})
+    if not isinstance(metadata, Mapping):
+        raise TypeError("track metadata must be an object")
+    return TranscriptionTrack(
+        track_id=str(data["track_id"]),
+        name=str(data["name"]),
+        role=TrackRole(str(data.get("role", TrackRole.UNKNOWN.value))),
+        source_name=str(data.get("source_name", "original")),
+        confidence=(
+            None if data.get("confidence") is None else float(data["confidence"])
+        ),
+        metadata=dict(metadata),
+        analysis=_analysis_from_dict(data["analysis"]),
+        tablature=_tablature_from_dict(data["tablature"]),
+    )
+
+
 def _stored_audio_path(
     audio_path: Path | None, project_path: Path | None
 ) -> dict[str, Any]:
@@ -365,17 +429,10 @@ def project_to_dict(
         "schema_version": CURRENT_SCHEMA_VERSION,
         "audio": _stored_audio_path(project.audio_path, target),
         "analysis_parameters": parameters,
-        "analysis": {
-            "duration_seconds": project.analysis.duration_seconds,
-            "sample_rate": project.analysis.sample_rate,
-            "notes": [_note_to_dict(note) for note in project.analysis.notes],
-            "raw_notes": [
-                _note_to_dict(note) for note in project.analysis.raw_notes
-            ],
-            "chords": [_chord_to_dict(chord) for chord in project.analysis.chords],
-            "rhythm": _rhythm_to_dict(project.analysis.rhythm),
-        },
+        "analysis": _analysis_to_dict(project.analysis),
         "tablature": _tablature_to_dict(project.tablature),
+        "tracks": [_track_to_dict(track) for track in project.tracks],
+        "active_track_id": project.active_track_id,
     }
 
 
@@ -419,33 +476,24 @@ def load_project(path: str | Path) -> TranscriptionProject:
         )
 
     try:
-        analysis_data = payload["analysis"]
-        analysis = AudioAnalysis(
-            duration_seconds=float(analysis_data["duration_seconds"]),
-            sample_rate=int(analysis_data["sample_rate"]),
-            # Large frame-level arrays are intentionally not persisted.
-            features={},
-            notes=tuple(
-                _note_from_dict(item) for item in analysis_data.get("notes", ())
-            ),
-            raw_notes=tuple(
-                _note_from_dict(item)
-                for item in analysis_data.get("raw_notes", ())
-            ),
-            rhythm=_rhythm_from_dict(analysis_data.get("rhythm")),
-            chords=tuple(
-                _chord_from_dict(item)
-                for item in analysis_data.get("chords", ())
-            ),
-        )
+        analysis = _analysis_from_dict(payload["analysis"])
         parameters = payload.get("analysis_parameters", {})
         if not isinstance(parameters, Mapping):
             raise TypeError("analysis_parameters must be an object")
+        tracks_data = payload.get("tracks", [])
+        if not isinstance(tracks_data, list):
+            raise TypeError("tracks must be an array")
         return TranscriptionProject(
             audio_path=_resolved_audio_path(payload.get("audio", {}), source),
             analysis=analysis,
             tablature=_tablature_from_dict(payload["tablature"]),
             analysis_parameters=dict(parameters),
+            tracks=tuple(_track_from_dict(item) for item in tracks_data),
+            active_track_id=(
+                None
+                if payload.get("active_track_id") is None
+                else str(payload["active_track_id"])
+            ),
         )
     except (AttributeError, KeyError, TypeError, ValueError, IndexError) as exc:
         raise ProjectFormatError(f"项目内容无效：{exc}") from exc

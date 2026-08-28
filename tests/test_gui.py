@@ -22,12 +22,14 @@ from src.audio.separator import (
     Stem,
 )
 from src.audio.transcription_service import TranscriptionResult
+from src.audio.track_classifier import TrackClassifier
 from src.gui.app import MainWindow
 from src.music.chord import Chord
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
 from src.music.timing import QuantizedNote, Rest, TimingInfo
-from src.project import load_project
+from src.music.track import TrackRole
+from src.project import TranscriptionTrack, load_project
 
 
 def _sample_analysis():
@@ -48,6 +50,59 @@ def _sample_analysis():
             quantized_notes=(quantized,),
             rests=(Rest(0.0, 0.2),),
         ),
+    )
+
+
+def _mixed_analysis():
+    lead = Note(69, start=0.0, duration=0.5, confidence=0.9)
+    chord_notes = tuple(
+        Note(midi, start=1.0, duration=1.0, confidence=0.8)
+        for midi in (48, 52, 55)
+    )
+    notes = (lead,) + chord_notes
+    timing = TimingInfo(tempo_bpm=120.0, time_signature=(4, 4))
+    return AudioAnalysis(
+        duration_seconds=2.5,
+        sample_rate=44_100,
+        notes=notes,
+        raw_notes=notes,
+        rhythm=RhythmAnalysis(
+            timing=timing,
+            quantized_notes=tuple(
+                QuantizedNote(
+                    source=note,
+                    note=note,
+                    start_beat=note.start * 2,
+                    duration_beats=note.duration * 2,
+                )
+                for note in notes
+            ),
+        ),
+        chords=(Chord.from_midis((48, 52, 55), start=1.0, duration=1.0),),
+    )
+
+
+def _mixed_result():
+    analysis = _mixed_analysis()
+    generator = TabGenerator()
+    tracks = tuple(
+        TranscriptionTrack(
+            track_id=f"logical-{candidate.role.value}",
+            name=candidate.name,
+            role=candidate.role,
+            analysis=candidate.analysis,
+            tablature=generator.generate(candidate.analysis),
+            confidence=candidate.confidence,
+            metadata={"logical": True, "independent_audio": False},
+        )
+        for candidate in TrackClassifier().classify(analysis)
+    )
+    return TranscriptionResult(
+        source_audio_path=Path("source.wav"),
+        analyzed_audio_path=Path("source.wav"),
+        analysis=analysis,
+        tablature=generator.generate(analysis),
+        tracks=tracks,
     )
 
 
@@ -424,5 +479,94 @@ def test_gui_polyphonic_mode_builds_polyphonic_analyzer(monkeypatch, tmp_path):
     assert captured["analyzer"].__class__.__name__ == "PolyphonicAudioAnalyzer"
     assert window.analysis_parameters["analysis_mode"] == "polyphonic"
     assert window.analysis_parameters["max_polyphony"] == 6
+    window.close()
+    app.processEvents()
+
+
+def test_gui_switches_logical_tracks_and_preserves_independent_edits():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window._show_transcription_result(_mixed_result())
+
+    assert window.track_combo.count() == 2
+    assert window.active_track_id == "logical-lead"
+    assert window.event_table.rowCount() == 1
+    assert "不是独立音频 stem" in window.track_info_label.text()
+
+    assert window.edit_controller is not None
+    changed_index = window.edit_controller.change_pitch(0, 71)
+    window._edited(changed_index, "修改主音")
+    window.track_combo.setCurrentIndex(
+        window.track_combo.findData("logical-rhythm")
+    )
+    assert window.event_table.rowCount() == 3
+    assert {window.event_table.item(row, 2).text() for row in range(3)} == {
+        "48",
+        "52",
+        "55",
+    }
+
+    window.track_combo.setCurrentIndex(window.track_combo.findData("logical-lead"))
+    assert window.event_table.item(0, 2).text() == "71"
+    for controller in window.track_controllers.values():
+        controller.mark_saved()
+    window.close()
+    app.processEvents()
+
+
+def test_gui_saves_track_roles_and_independent_tablatures(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    project_path = tmp_path / "tracks.guitarbapu.json"
+    window = MainWindow()
+    window.selected_file = tmp_path / "missing.wav"
+    window._show_transcription_result(_mixed_result())
+    assert window.edit_controller is not None
+    changed_index = window.edit_controller.change_pitch(0, 71)
+    window._edited(changed_index, "修改")
+    window.track_role_combo.setCurrentIndex(
+        window.track_role_combo.findData(TrackRole.SOLO.value)
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(project_path), ""),
+    )
+
+    assert window._save_project()
+    loaded = load_project(project_path)
+
+    assert len(loaded.tracks) == 2
+    assert loaded.active_track_id == "logical-lead"
+    assert loaded.active_track is not None
+    assert loaded.active_track.role is TrackRole.SOLO
+    assert loaded.active_track.tablature.events[0].note is not None
+    assert loaded.active_track.tablature.events[0].note.midi == 71
+    assert loaded.analysis.notes[0].midi == 69
+    assert not window._dirty_controllers()
+    assert window.track_metadata_dirty is False
+    window.close()
+    app.processEvents()
+
+
+def test_gui_exports_only_the_selected_logical_track(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    output = tmp_path / "rhythm-track.txt"
+    window = MainWindow()
+    window._show_transcription_result(_mixed_result())
+    window.track_combo.setCurrentIndex(
+        window.track_combo.findData("logical-rhythm")
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(output), ""),
+    )
+
+    window._export_text()
+
+    content = output.read_text(encoding="utf-8")
+    assert "Mapped: 3" in content
+    assert "Mapped: 4" not in content
+    assert "当前轨道" in window.status_label.text()
     window.close()
     app.processEvents()

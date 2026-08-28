@@ -18,6 +18,7 @@ from src.audio.separator import (
 from src.audio.transcription_service import TranscriptionService
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
+from src.music.track import TrackRole
 
 
 class _Analyzer:
@@ -89,6 +90,9 @@ def test_direct_transcription_reuses_preloaded_audio(tmp_path):
     assert result.analyzed_audio_path == source.resolve()
     assert analyzer.durations == [1.0]
     assert len(result.tablature.events) == 1
+    assert len(result.tracks) == 1
+    assert result.tracks[0].role is TrackRole.LEAD
+    assert result.tracks[0].source_name == "original"
     assert progress[-1].stage == "complete"
 
 
@@ -109,6 +113,7 @@ def test_separated_transcription_analyzes_guitar_stem(tmp_path):
     assert result.analyzed_audio_path == guitar
     assert result.separation is not None
     assert analyzer.durations == [0.5]
+    assert result.tracks[0].source_name == "guitar"
 
 
 def test_requesting_separation_without_backend_is_explicit(tmp_path):
