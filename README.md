@@ -320,3 +320,10 @@ macOS 也可以在 Finder 中双击 `run_app.command`。GUI 会在后台分析�
 ```bash
 python -m pytest
 ```
+
+如果手边有已获授权或自制的参考 TAB，可以用本地评测脚本比较程序输出；参考谱默认不提交进仓库：
+
+```bash
+python scripts/compare_ascii_tab.py song.mp3 ref.txt --mode polyphonic
+GB_EVAL_CASES=eval_cases.local.json GB_EVAL_MAX_RUNS=1 ./scripts/run_eval_loop.sh
+```
