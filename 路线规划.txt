@@ -1,0 +1,200 @@
+GuitarBapu 开发路线规划
+========================
+
+文档目的
+--------
+这份文档用于在更换 AI 编程助手或额度耗尽后，快速恢复项目上下文。每个阶段都应该独立实现、测试和提交，不要一次性重构整个项目。
+
+一、项目目标
+------------
+GuitarBapu 是一款面向吉他手的桌面扒谱工具：导入歌曲或吉他录音，分析音符和节奏，推荐可演奏的琴弦/品位，生成可编辑的六线谱，并导出为常用格式。
+
+长期能力：
+- 从 MP3/WAV/FLAC 读取音频，并支持录音输入。
+- 对单音旋律和多音吉他素材进行音高、节奏分析。
+- 处理多个吉他轨道（主音、节奏、Solo）。
+- 推荐合理指法，并尽可能识别推弦、滑弦、击弦/勾弦等技巧。
+- 通过 GUI 编辑、试听、定位和导出 TAB。
+- 使用音源分离模型只提取吉他轨道。
+
+二、当前仓库状态（截至本规划生成时）
+--------------------------------------
+已存在的主要文件：
+- src/audio/loader.py：Audio Loader，返回 AudioData，支持 MP3/WAV/FLAC。
+- src/audio/analyzer.py：Phase 2 基础实现，使用 librosa.yin，返回逐帧 pitch_hz 和 Note 元组。
+- src/music/note.py：Note 数据对象，包含 MIDI、开始时间、持续时间、力度，并支持频率转换。
+- src/music/guitar.py：标准吉他基础模型。
+- src/music/tab.py：TabEvent/Tablature 基础数据结构。
+- src/gui/app.py：PyQt6 GUI 骨架。
+- tests/test_smoke.py、tests/test_analyzer.py：基础导入和音高分析测试。
+
+依赖：numpy、librosa、soundfile、sounddevice、music21、PyQt6、pytest。
+
+注意：Audio Loader 属于已完成模块。后续阶段不要修改其公开行为；如需重采样、降噪或声道处理，应在新的 preprocessing 模块中完成。
+
+三、总体数据流
+--------------
+音频文件/录音
+  -> AudioData
+  -> 预处理（采样率、声道、降噪、音源分离）
+  -> Pitch/Rhythm Analysis
+  -> Note / Chord / Timing 对象
+  -> Fretboard Mapping（琴弦、品位、指法）
+  -> Tablature
+  -> GUI 编辑与试听
+  -> MIDI / MusicXML / Guitar Pro / PDF 导出
+
+模块边界原则：音频模块只产生分析结果，music 模块只表达音乐对象，TAB 模块只负责指板映射和排谱，GUI 不直接实现算法。
+
+四、分阶段路线
+--------------
+
+Phase 0：项目基础架构（已完成）
+目标：建立可导入的 src 包、配置、日志、GUI 入口和测试目录。
+验收：python -m pytest 可运行，模块边界清晰。
+后续只在需要时维护，不做大规模重构。
+
+Phase 1：Audio Loader（已完成）
+目标：将音频文件解码为统一的 AudioData：waveform、sample_rate、duration、channels。
+已有实现：src/audio/loader.py。
+验收：覆盖支持格式、文件不存在、采样率和 mono/stereo 行为的测试。
+约束：后续分析器接收 AudioData，不直接依赖文件路径；不要把预处理逻辑塞回 loader.py。
+
+Phase 2：Pitch Detection（基础版已完成，需增强）
+已有能力：
+- src/audio/analyzer.py 使用 librosa.yin 做单音逐帧音高检测。
+- 静音/低能量帧过滤为 NaN。
+- 频率量化为 MIDI，并合并连续帧为 Note。
+- AudioAnalysis.notes 和 features["pitch_hz"] 可供后续模块使用。
+
+建议增强顺序：
+1. 用真实 WAV/吉他单音样本做集成测试，验证 A2、E3、A4 等音高误差。
+2. 增加置信度/voiced 标记，区分低置信度帧和真正休止。
+3. 增加音符去抖、最短时长和相邻同音合并参数。
+4. 根据采样率检查 fmax、frame_length 和 hop_length，给出清晰错误信息。
+5. 保留当前 Note 和 AudioAnalysis 接口，避免影响 Audio Loader。
+
+建议文件：src/audio/analyzer.py、src/audio/preprocessor.py（后续）、tests/test_analyzer.py、tests/fixtures/。
+阶段提交示例：feat: add basic monophonic pitch detection。
+
+Phase 3：Guitar Fretboard Mapping（基础版已完成）
+目标：把 Note.midi 映射为一个或多个可演奏位置（string、fret）。
+
+本阶段已完成：
+- Guitar 支持标准 E-A-D-G-B-E 调弦、品位范围和 capo。
+- src/music/fretboard.py 提供 FretPosition、所有位置枚举和 MIDI 查询。
+- 提供优先低品位、减少换把和保持连续性的基础启发式选择。
+- 已添加空弦、12 品、多位置、不可演奏音符、capo 和连续旋律测试。
+
+当前限制：指法评分仍是启发式规则，暂不处理手指编号、和弦按法、滑弦/推弦等技巧。
+
+实现顺序：
+1. 完善 Guitar：弦数量、每根弦空弦 MIDI、品数、调弦方式。
+2. 新建 src/music/fretboard.py，生成每根弦每个品位的 MIDI 索引。
+3. 实现 find_positions(note) -> tuple[FretPosition, ...]。
+4. 处理不可演奏音符、变调/降调调弦和 capo 参数。
+5. 新建指法评分器：优先低品位，其次减少跨弦和换把，最后考虑连续音符的手指移动。
+
+建议对象：FretPosition、FingeringCandidate、FingeringCost。不要让 TAB 渲染代码直接计算 MIDI。
+测试：覆盖标准调弦空弦、12 品八度、音符多位置、超出指板范围、连续旋律评分。
+阶段提交示例：feat: map notes to guitar fretboard positions。
+
+Phase 4：Timing 与 Note 清理
+目标：把逐帧检测结果变成稳定、可编辑的节奏事件，为 TAB 排版做准备。
+
+实现顺序：
+1. 增加 onset/offset 检测，去掉 YIN 首尾边缘误检。
+2. 增加节拍估计和拍号/tempo 数据对象；未知 tempo 时仍保留秒级时间。
+3. 将音符时值量化为可配置网格（如 1/16、1/8），保留原始时间用于回溯。
+4. 明确休止符、连音、重叠音符和同音重复的规则。
+5. 为 Note 增加可选 confidence、原始频率等分析元数据，但保持 midi/start/duration 兼容。
+
+建议文件：src/music/timing.py、src/audio/rhythm.py、src/music/note.py。
+测试：合成节拍音频、已知 BPM 的短旋律、边界帧、静音段和量化误差。
+阶段提交示例：feat: normalize detected note timing。
+
+Phase 5：TAB Generator
+目标：将音符和指法位置转换为结构化、可编辑的六线谱。
+
+实现顺序：
+1. 扩展 TabEvent/Tablature，保存音符关联、弦、品、时间和技巧。
+2. 对一段 Note 序列调用指法优化器，得到稳定的连续位置。
+3. 支持休止、和弦（同一时间多个事件）、小节线和拍号。
+4. 实现文本 TAB 渲染器，先保证确定性和可测试性。
+5. 为 GUI 提供结构化数据，不让 GUI 解析文本 TAB。
+
+验收示例：E4-G4-A4 能生成合法六线谱；每个事件弦号和品位在吉他范围内；无法映射时给出诊断而不是静默丢失。
+测试：单音阶、跨弦替代位置、和弦、不可映射音符、换把成本。
+阶段提交示例：feat: generate editable guitar tablature。
+
+Phase 6：导出与持久化
+目标：让分析结果可以保存、交换和在外部软件打开。
+
+实现顺序：
+1. 先实现 JSON 项目文件，保存音频引用、Note、Tablature、调弦和分析参数。
+2. 使用 music21 生成 MIDI/MusicXML，并核对 tempo、时值和音高。
+3. 评估 Guitar Pro 导出方案（优先使用稳定库或 MusicXML 中间格式）。
+4. 增加 PDF/文本 TAB 导出，明确字体和分页策略。
+5. 为每种导出格式增加 round-trip 或内容快照测试。
+
+建议文件：src/export/json.py、src/export/midi.py、src/export/musicxml.py、src/export/guitarpro.py、src/project/model.py。
+阶段提交示例：feat: export transcription to midi and project json。
+
+Phase 7：GUI 工作流
+目标：提供可用的导入、分析、查看、编辑和导出流程。
+
+实现顺序：
+1. 文件选择和音频元数据显示。
+2. 开始/取消分析、后台线程和进度/错误状态。
+3. 音频波形与时间游标；点击音符可定位播放。
+4. TAB 编辑：修改音符、弦、品、时值和删除/插入事件。
+5. 播放、暂停、循环选区和导出按钮。
+6. GUI 只调用 AudioAnalyzer、Fretboard、Tablature 和 export API。
+
+测试：优先测试无 GUI 的 controller/service；再做关键 Qt 界面 smoke test。任何耗时分析不得阻塞主线程。
+阶段提交示例：feat: add end-to-end transcription gui workflow。
+
+Phase 8：音源分离与多轨分析
+目标：从完整歌曲中提取吉他轨，再进行音高和节奏分析。
+
+实现顺序：
+1. 新建 src/audio/separator.py，定义可替换的 Separator 接口。
+2. 接入 Demucs，输出 guitar stem，并缓存模型和结果。
+3. 在 GUI 中显示分离进度、缓存位置和失败原因。
+4. 对每个 stem 独立分析，标记主音/节奏轨；暂时不要自动合并冲突事件。
+5. 用真实歌曲建立小型评测集，记录分离耗时和音高准确率。
+
+阶段提交示例：feat: add optional guitar stem separation。
+
+Phase 9：高级识别与产品化
+目标：提升真实歌曲可用性，而不是继续堆叠未经验证的算法。
+
+方向：
+- 复音音高和和弦识别（考虑 CQT、chroma、预训练模型）。
+- 推弦、滑弦、击弦/勾弦、颤音等演奏技巧的特征识别。
+- 人工修正反馈和 AI 辅助重排指法。
+- 结果置信度、可解释的错误提示和批量处理。
+- 安装包、模型下载、日志诊断、跨平台打包。
+
+每项高级功能都先定义数据格式、评测指标和失败回退策略，再实现模型；低置信度结果必须允许用户编辑。
+
+五、每个阶段的固定执行模板
+--------------------------
+1. 阅读当前相关模块和测试，不修改无关文件。
+2. 写清输入/输出数据契约和不支持的情况。
+3. 先添加失败测试，再实现最小功能。
+4. 保持模块化，避免把逻辑放入 GUI 或 main 入口。
+5. 运行 python -m pytest、python -m compileall -q src tests、git diff --check。
+6. 更新 README 和本路线文档中的状态。
+7. 提交一个单一目的的 commit，并记录变更文件、测试命令和已知限制。
+
+六、推荐的下一步
+----------------
+当前最合理的下一阶段是 Phase 4，但建议先补齐 Phase 2 的真实音频集成测试。推荐顺序：
+
+1. 准备 3-5 个短 WAV 样本（单音、静音、两音切换、带噪声）。
+2. 验证 AudioAnalyzer 的频率误差、起止时间和 Note 合并结果。
+3. 在 Phase 4 中实现 onset/offset、节拍估计和音符时值量化。
+4. 将清理后的 Note 序列接入 TabGenerator；GUI 和 Demucs 暂不提前实现。
+
+当前不要做：一次性重写 loader、直接开发复杂 GUI、在没有评测样本时接入多个 AI 模型、为了导出格式提前破坏内部 Note/Tab 数据契约。
