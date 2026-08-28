@@ -3,6 +3,7 @@
 from concurrent.futures import Future
 import os
 from pathlib import Path
+from threading import Event
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -11,10 +12,19 @@ import soundfile as sf
 from PyQt6.QtWidgets import QApplication, QFileDialog, QMessageBox
 
 from src.audio.analyzer import AudioAnalysis
+from src.audio.demucs_separator import DemucsSeparator
 from src.audio.loader import load_audio
 from src.audio.rhythm import RhythmAnalysis
+from src.audio.separator import (
+    SeparationError,
+    SeparationProgress,
+    SeparationResult,
+    Stem,
+)
+from src.audio.transcription_service import TranscriptionResult
 from src.gui.app import MainWindow
 from src.music.note import Note
+from src.music.tab_generator import TabGenerator
 from src.music.timing import QuantizedNote, Rest, TimingInfo
 from src.project import load_project
 
@@ -243,5 +253,128 @@ def test_edited_tablature_is_saved_while_analysis_source_is_preserved(
     assert loaded.tablature.events[0].note is not None
     assert loaded.tablature.events[0].note.midi == 67
     assert window.edit_controller.dirty is False
+    window.close()
+    app.processEvents()
+
+
+def test_demucs_option_is_disabled_when_optional_backend_is_missing(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    monkeypatch.setattr(DemucsSeparator, "is_available", staticmethod(lambda: False))
+
+    window = MainWindow()
+
+    assert not window.separate_guitar_checkbox.isEnabled()
+    assert "requirements-separation.txt" in window.separate_guitar_checkbox.toolTip()
+    window.close()
+    app.processEvents()
+
+
+def test_gui_displays_separation_progress():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.analysis_future = Future()
+    window.analysis_progress_state = SeparationProgress(
+        "separating", 0.5, "正在分离吉他音轨…"
+    )
+
+    window._poll_analysis()
+
+    assert window.analysis_progress.maximum() == 100
+    assert window.analysis_progress.value() == 50
+    assert window.status_label.text() == "正在分离吉他音轨…"
+    window.close()
+    app.processEvents()
+
+
+def test_gui_adds_guitar_stem_without_replacing_original_project_audio(tmp_path):
+    app = QApplication.instance() or QApplication([])
+    original_path = tmp_path / "original.wav"
+    guitar_path = tmp_path / "guitar.wav"
+    sf.write(original_path, np.zeros(1000, dtype=np.float32), 1000)
+    sf.write(guitar_path, np.zeros(1000, dtype=np.float32), 1000)
+    window = MainWindow()
+    window._set_audio_source(original_path, load_audio(original_path))
+    analysis = _sample_analysis()
+    separation = SeparationResult(
+        source_path=original_path,
+        model_name="htdemucs_6s",
+        device="cpu",
+        cache_key="a" * 64,
+        stems=(Stem("guitar", guitar_path, 1000, 1, 1.0),),
+    )
+    result = TranscriptionResult(
+        source_audio_path=original_path,
+        analyzed_audio_path=guitar_path,
+        analysis=analysis,
+        tablature=TabGenerator().generate(analysis),
+        separation=separation,
+    )
+
+    window._show_transcription_result(result)
+
+    assert window.selected_file == original_path
+    assert window.audio is not None
+    assert window.playback_source_combo.currentText() == "吉他分离轨"
+    assert set(window.playback_sources) == {"原音频", "吉他分离轨"}
+    assert window.analysis_parameters["separation"]["cache_key"] == "a" * 64
+    window.close()
+    app.processEvents()
+
+
+def test_gui_cancel_sets_cooperative_event():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.analysis_future = Future()
+    window.analysis_cancel_event = Event()
+
+    window._cancel_analysis()
+
+    assert window.analysis_cancel_event.is_set()
+    assert window.analysis_cancel_requested
+    window.close()
+    app.processEvents()
+
+
+def test_gui_separation_error_recommends_original_audio_fallback():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    future = Future()
+    future.set_exception(SeparationError("模型失败"))
+    window.analysis_future = future
+
+    window._poll_analysis()
+
+    assert "可取消勾选后分析原音频" in window.status_label.text()
+    window.close()
+    app.processEvents()
+
+
+def test_project_save_keeps_original_audio_after_stem_playback(
+    monkeypatch, tmp_path
+):
+    app = QApplication.instance() or QApplication([])
+    original_path = tmp_path / "original.wav"
+    guitar_path = tmp_path / "guitar.wav"
+    project_path = tmp_path / "separated.guitarbapu.json"
+    sf.write(original_path, np.zeros(1000, dtype=np.float32), 1000)
+    sf.write(guitar_path, np.zeros(1000, dtype=np.float32), 1000)
+    window = MainWindow()
+    window._set_audio_source(original_path, load_audio(original_path))
+    window._show_analysis(_sample_analysis())
+    window._set_playback_sources(
+        {
+            "原音频": (original_path, load_audio(original_path)),
+            "吉他分离轨": (guitar_path, load_audio(guitar_path)),
+        },
+        selected="吉他分离轨",
+    )
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(project_path), ""),
+    )
+
+    assert window._save_project()
+    assert load_project(project_path).audio_path == original_path
     window.close()
     app.processEvents()

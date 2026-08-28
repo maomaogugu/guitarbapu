@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from pathlib import Path
 import sys
+from threading import Event
 
 from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtGui import QFontDatabase
@@ -12,6 +13,7 @@ from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
     QCheckBox,
+    QComboBox,
     QDialog,
     QFileDialog,
     QFrame,
@@ -33,7 +35,19 @@ from PyQt6.QtWidgets import (
 )
 
 from src.audio.analyzer import AudioAnalysis, AudioAnalyzer
+from src.audio.demucs_separator import DemucsConfig, DemucsSeparator
 from src.audio.loader import AudioData, load_audio
+from src.audio.separation_cache import SeparationCache
+from src.audio.separator import (
+    SeparationCancelled,
+    SeparationError,
+    SeparationProgress,
+    SeparationResult,
+)
+from src.audio.transcription_service import (
+    TranscriptionResult,
+    TranscriptionService,
+)
 from src.exporters import export_midi, export_musicxml, export_text_tab
 from src.gui.audio_player import AudioPlayer, format_seconds
 from src.gui.controller import TabEditController, TabEditError
@@ -79,6 +93,10 @@ class MainWindow(QMainWindow):
         self.analysis_executor = ThreadPoolExecutor(max_workers=1)
         self.analysis_future: Future | None = None
         self.analysis_cancel_requested = False
+        self.analysis_cancel_event: Event | None = None
+        self.analysis_progress_state: SeparationProgress | None = None
+        self.last_separation_result: SeparationResult | None = None
+        self.playback_sources: dict[str, tuple[Path, AudioData]] = {}
         self.analysis_timer = QTimer(self)
         self.analysis_timer.setInterval(100)
         self.analysis_timer.timeout.connect(self._poll_analysis)
@@ -132,6 +150,12 @@ class MainWindow(QMainWindow):
         self.loop_checkbox = QCheckBox("循环选区")
         self.loop_checkbox.toggled.connect(self._loop_toggled)
         playback_controls.addWidget(self.loop_checkbox)
+        self.playback_source_combo = QComboBox()
+        self.playback_source_combo.setMinimumWidth(120)
+        self.playback_source_combo.currentTextChanged.connect(
+            self._playback_source_selected
+        )
+        playback_controls.addWidget(self.playback_source_combo)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(
@@ -146,6 +170,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(playback_group)
 
         analysis_row = QHBoxLayout()
+        self.separate_guitar_checkbox = QCheckBox("先分离吉他（Demucs）")
+        demucs_available = DemucsSeparator.is_available()
+        self.separate_guitar_checkbox.setEnabled(demucs_available)
+        if demucs_available:
+            device = DemucsSeparator.available_device().upper()
+            self.separate_guitar_checkbox.setToolTip(
+                f"模型：htdemucs_6s；设备：{device}；"
+                "首次使用可能下载约 52 MB；分离结果会自动缓存"
+            )
+        else:
+            self.separate_guitar_checkbox.setToolTip(
+                "请在 Python 3.12 .venv 中安装 requirements-separation.txt"
+            )
+        analysis_row.addWidget(self.separate_guitar_checkbox)
         self.analyze_button = QPushButton("开始分析")
         self.analyze_button.setEnabled(False)
         self.analyze_button.clicked.connect(self._start_analysis)
@@ -266,6 +304,7 @@ class MainWindow(QMainWindow):
             self.play_button,
             self.stop_button,
             self.loop_checkbox,
+            self.playback_source_combo,
             self.position_slider,
             self.waveform,
         ):
@@ -277,6 +316,7 @@ class MainWindow(QMainWindow):
         self.analysis = None
         self.tablature = None
         self.edit_controller = None
+        self.last_separation_result = None
         if not keep_project_path:
             self.project_path = None
         self.analysis_parameters = {}
@@ -288,6 +328,10 @@ class MainWindow(QMainWindow):
 
     def _clear_audio_view(self) -> None:
         self.audio_player.set_source(None)
+        self.playback_sources = {}
+        self.playback_source_combo.blockSignals(True)
+        self.playback_source_combo.clear()
+        self.playback_source_combo.blockSignals(False)
         self.waveform.clear()
         self.position_slider.setRange(0, 0)
         self.time_label.setText("00:00.000 / 00:00.000")
@@ -296,8 +340,34 @@ class MainWindow(QMainWindow):
     def _set_audio_source(self, path: Path, audio: AudioData) -> None:
         self.audio = audio
         self.selected_file = path
+        self._set_playback_sources({"原音频": (path, audio)}, selected="原音频")
+
+    def _set_playback_sources(
+        self,
+        sources: dict[str, tuple[Path, AudioData]],
+        *,
+        selected: str,
+    ) -> None:
+        self.playback_sources = dict(sources)
+        self.playback_source_combo.blockSignals(True)
+        self.playback_source_combo.clear()
+        self.playback_source_combo.addItems(self.playback_sources)
+        self.playback_source_combo.setCurrentText(selected)
+        self.playback_source_combo.blockSignals(False)
+        self._activate_playback_source(selected)
+
+    def _activate_playback_source(self, name: str) -> None:
+        source = self.playback_sources.get(name)
+        if source is None:
+            return
+        path, audio = source
+        self.audio_player.stop()
         self.waveform.set_audio(audio.waveform, audio.sample_rate)
         self._playback_duration_changed(audio.duration)
+        if self.tablature is not None:
+            self.waveform.set_event_times(
+                event.start for event in self.tablature.events
+            )
         try:
             self.audio_player.set_source(path)
         except FileNotFoundError as error:
@@ -305,6 +375,10 @@ class MainWindow(QMainWindow):
             self.status_label.setText(str(error))
         else:
             self._set_playback_enabled(True)
+
+    def _playback_source_selected(self, name: str) -> None:
+        if name:
+            self._activate_playback_source(name)
 
     def _choose_audio_file(self) -> None:
         if not self._confirm_discard_changes():
@@ -375,6 +449,8 @@ class MainWindow(QMainWindow):
             else:
                 audio_text = f"{project.audio_path}（文件已移动或缺失）"
 
+        self._restore_cached_separation_playback()
+
         self.file_label.setText(
             f"项目：{self.project_path.name}\n原音频：{audio_text}"
         )
@@ -400,8 +476,19 @@ class MainWindow(QMainWindow):
         self.open_project_button.setEnabled(False)
         self.cancel_analysis_button.setEnabled(True)
         self.analysis_progress.setVisible(True)
+        self.analysis_progress.setRange(0, 0)
         self._clear_result(keep_project_path=True)
-        self.status_label.setText("正在检测音高、清理音符并分析节奏，请稍候…")
+        use_separation = self.separate_guitar_checkbox.isChecked()
+        if self.selected_file is not None:
+            self._set_playback_sources(
+                {"原音频": (self.selected_file, self.audio)},
+                selected="原音频",
+            )
+        self.status_label.setText(
+            "正在准备吉他分离；首次使用可能下载约 52 MB 模型…"
+            if use_separation
+            else "正在检测音高、清理音符并分析节奏，请稍候…"
+        )
         analyzer = AudioAnalyzer()
         self.analysis_parameters = {
             "fmin_hz": analyzer.fmin_hz,
@@ -410,10 +497,31 @@ class MainWindow(QMainWindow):
             "hop_length": analyzer.hop_length,
             "energy_threshold": analyzer.energy_threshold,
             "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+            "use_separation": use_separation,
         }
+        separator = None
+        if use_separation:
+            separator = DemucsSeparator(DemucsConfig(model_name="htdemucs_6s"))
+            self.analysis_parameters["separation_model"] = "htdemucs_6s"
         self.analysis_cancel_requested = False
+        self.analysis_cancel_event = Event()
+        self.analysis_progress_state = None
+        service = TranscriptionService(
+            analyzer=analyzer,
+            tab_generator=TabGenerator(),
+            separator=separator,
+        )
+
+        def progress_callback(progress: SeparationProgress) -> None:
+            self.analysis_progress_state = progress
+
         self.analysis_future = self.analysis_executor.submit(
-            analyzer.analyze, self.audio
+            service.transcribe,
+            self.selected_file,
+            audio=None if use_separation else self.audio,
+            use_separation=use_separation,
+            progress_callback=progress_callback,
+            cancel_event=self.analysis_cancel_event,
         )
         self.analysis_timer.start()
 
@@ -421,28 +529,42 @@ class MainWindow(QMainWindow):
         if self.analysis_future is None:
             return
         self.analysis_cancel_requested = True
+        if self.analysis_cancel_event is not None:
+            self.analysis_cancel_event.set()
         self.analysis_future.cancel()
         self.cancel_analysis_button.setEnabled(False)
         self.status_label.setText(
-            "已请求取消；正在等待当前 librosa 计算安全结束…"
+            "已请求取消；正在等待当前 Demucs/librosa 计算安全结束…"
         )
 
     def _poll_analysis(self) -> None:
         future = self.analysis_future
-        if future is None or not future.done():
+        if future is None:
+            return
+        progress = self.analysis_progress_state
+        if progress is not None and not self.analysis_cancel_requested:
+            if progress.fraction is None:
+                self.analysis_progress.setRange(0, 0)
+            else:
+                self.analysis_progress.setRange(0, 100)
+                self.analysis_progress.setValue(round(progress.fraction * 100))
+            self.status_label.setText(progress.message)
+        if not future.done():
             return
         self.analysis_timer.stop()
         try:
             if self.analysis_cancel_requested or future.cancelled():
                 self.status_label.setText("分析已取消")
                 return
-            analysis = future.result()
-        except CancelledError:
+            result = future.result()
+        except (CancelledError, SeparationCancelled):
             self.status_label.setText("分析已取消")
+        except SeparationError as error:
+            self.status_label.setText(f"吉他分离失败：{error}；可取消勾选后分析原音频")
         except Exception as error:  # GUI boundary: report instead of crashing
             self.status_label.setText(f"分析失败：{error}")
         else:
-            self._show_analysis(analysis)
+            self._show_transcription_result(result)
         finally:
             self._analysis_finished()
 
@@ -454,19 +576,83 @@ class MainWindow(QMainWindow):
         self.analysis_progress.setVisible(False)
         self.analysis_future = None
         self.analysis_cancel_requested = False
+        self.analysis_cancel_event = None
+        self.analysis_progress_state = None
 
-    def _show_analysis(self, analysis: AudioAnalysis) -> None:
+    def _show_transcription_result(self, result: TranscriptionResult) -> None:
+        self.last_separation_result = result.separation
+        self._show_analysis(result.analysis, tablature=result.tablature)
+        if result.separation is None:
+            return
+        separation = result.separation
+        cache_text = "复用缓存" if separation.from_cache else "新生成"
+        self.analysis_parameters["separation"] = {
+            "model_name": separation.model_name,
+            "device": separation.device,
+            "cache_key": separation.cache_key,
+            "stem": "guitar",
+        }
+        try:
+            guitar_audio = load_audio(result.analyzed_audio_path)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.status_label.setText(
+                self.status_label.text() + f"；吉他 stem 播放加载失败：{error}"
+            )
+        else:
+            sources = dict(self.playback_sources)
+            sources["吉他分离轨"] = (result.analyzed_audio_path, guitar_audio)
+            self._set_playback_sources(sources, selected="吉他分离轨")
+        if self.selected_file is not None and self.audio is not None:
+            self.file_label.setText(
+                f"文件名：{self.selected_file.name}\n"
+                f"原音频：{self.audio.duration:.2f} 秒 / {self.audio.sample_rate} Hz\n"
+                f"分析源：guitar stem（{separation.model_name}，"
+                f"{separation.device.upper()}，{cache_text}）"
+            )
+        self.status_label.setText(
+            self.status_label.text() + f"；吉他分离轨已就绪（{cache_text}）"
+        )
+
+    def _restore_cached_separation_playback(self) -> None:
+        separation = self.analysis_parameters.get("separation")
+        if not isinstance(separation, dict):
+            return
+        cache_key = separation.get("cache_key")
+        if not isinstance(cache_key, str):
+            return
+        try:
+            cached = SeparationCache().load(cache_key)
+            if cached is None:
+                return
+            guitar_path = cached.stem("guitar").path
+            guitar_audio = load_audio(guitar_path)
+        except (OSError, ValueError, RuntimeError, SeparationError):
+            return
+        sources = dict(self.playback_sources)
+        sources["吉他分离轨"] = (guitar_path, guitar_audio)
+        self._set_playback_sources(
+            sources,
+            selected="原音频" if "原音频" in sources else "吉他分离轨",
+        )
+
+    def _show_analysis(
+        self,
+        analysis: AudioAnalysis,
+        *,
+        tablature: Tablature | None = None,
+    ) -> None:
         if not analysis.notes:
             self.status_label.setText("分析完成：未检测到可用的单音音符")
             self.tab_output.setPlainText(
                 "未检测到音符。请尝试单音、较清晰的吉他录音。"
             )
             return
-        try:
-            tablature = TabGenerator().generate(analysis)
-        except (RuntimeError, ValueError) as error:
-            self.status_label.setText(f"分析失败：TAB 生成失败：{error}")
-            return
+        if tablature is None:
+            try:
+                tablature = TabGenerator().generate(analysis)
+            except (RuntimeError, ValueError) as error:
+                self.status_label.setText(f"分析失败：TAB 生成失败：{error}")
+                return
         self.analysis = analysis
         self.tablature = tablature
         self.edit_controller = TabEditController(tablature)
@@ -869,6 +1055,8 @@ class MainWindow(QMainWindow):
             return
         self.analysis_timer.stop()
         self.analysis_cancel_requested = True
+        if self.analysis_cancel_event is not None:
+            self.analysis_cancel_event.set()
         if self.analysis_future is not None:
             self.analysis_future.cancel()
         self.audio_player.stop()
