@@ -16,6 +16,7 @@ from ..music.tab import TabEvent, TabRest, Tablature, UnmappedNote
 from ..music.technique import GuitarTechnique, TechniqueDetection
 from ..music.timing import QuantizedNote, Rest, TimingInfo
 from ..music.track import TrackRole
+from ..utils.atomic import atomic_replace
 from .model import TranscriptionProject
 from .track import TranscriptionTrack
 
@@ -451,7 +452,11 @@ def _stored_audio_path(
     resolved = audio_path.expanduser().resolve(strict=False)
     if project_path is None:
         return {"path": str(resolved), "relative": False}
-    relative = os.path.relpath(resolved, project_path.parent.resolve(strict=False))
+    try:
+        relative = os.path.relpath(resolved, project_path.parent.resolve(strict=False))
+    except ValueError:
+        # Windows cannot build a relative path across different drives.
+        return {"path": str(resolved), "relative": False}
     return {"path": relative, "relative": True}
 
 
@@ -483,11 +488,14 @@ def save_project(project: TranscriptionProject, path: str | Path) -> Path:
 
     target = Path(path).expanduser().resolve(strict=False)
     payload = project_to_dict(project, project_path=target)
-    target.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
-        encoding="utf-8",
-    )
-    return target
+
+    def write(temporary: Path) -> None:
+        temporary.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    return atomic_replace(target, write)
 
 
 def _resolved_audio_path(data: Mapping[str, Any], project_path: Path) -> Path | None:

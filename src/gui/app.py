@@ -1472,15 +1472,28 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard_changes():
             event.ignore()
             return
+
+        analysis_running = (
+            self.analysis_future is not None and not self.analysis_future.done()
+        )
+        model_running = self.model_future is not None and not self.model_future.done()
+        if analysis_running or model_running:
+            self.analysis_cancel_requested = True
+            if self.analysis_cancel_event is not None:
+                self.analysis_cancel_event.set()
+            if self.analysis_future is not None:
+                self.analysis_future.cancel()
+            if self.model_future is not None:
+                self.model_future.cancel()
+            self.status_label.setText(
+                "正在等待后台任务安全结束后关闭；可再次尝试关闭窗口…"
+            )
+            event.ignore()
+            QTimer.singleShot(750, self.close)
+            return
+
         self.analysis_timer.stop()
         self.model_timer.stop()
-        self.analysis_cancel_requested = True
-        if self.analysis_cancel_event is not None:
-            self.analysis_cancel_event.set()
-        if self.analysis_future is not None:
-            self.analysis_future.cancel()
-        if self.model_future is not None:
-            self.model_future.cancel()
         self.audio_player.stop()
         self.analysis_executor.shutdown(wait=False, cancel_futures=True)
         self.product_executor.shutdown(wait=False, cancel_futures=True)

@@ -52,6 +52,35 @@ def test_position_change_only_accepts_same_pitch():
         controller.change_position(index, FretPosition(2, 6))
 
 
+def test_position_change_preserves_second_based_timing_when_beats_are_missing():
+    source = Note(64, start=1.0, duration=0.5)
+    controller = TabEditController(
+        Tablature(
+            events=(
+                TabEvent(
+                    string=1,
+                    fret=0,
+                    note=source,
+                    start=1.0,
+                    duration=0.5,
+                    start_beat=None,
+                    duration_beats=None,
+                ),
+            ),
+            tempo_bpm=120.0,
+            subdivision=4,
+        )
+    )
+
+    index = controller.change_position(0, FretPosition(2, 5))
+    event = controller.tablature.events[index]
+
+    assert event.start_beat == 2.0
+    assert event.duration_beats == 1.0
+    assert event.start == 1.0
+    assert event.duration == 0.5
+
+
 def test_timing_edit_recalculates_seconds_measure_and_tie():
     controller = TabEditController(_tablature())
 

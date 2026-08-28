@@ -243,3 +243,27 @@ def test_project_wraps_invalid_nested_content_as_format_error(tmp_path):
 
     with pytest.raises(ProjectFormatError, match="项目内容无效"):
         load_project(project_path)
+
+
+def test_project_save_falls_back_to_absolute_audio_path_across_drives(
+    monkeypatch, tmp_path
+):
+    import src.project.serializer as serializer
+
+    audio_path = tmp_path / "audio.wav"
+    audio_path.touch()
+    project_path = tmp_path / "song.guitarbapu.json"
+    monkeypatch.setattr(
+        serializer.os.path,
+        "relpath",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("different drives")),
+    )
+
+    save_project(_project(audio_path), project_path)
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+
+    assert payload["audio"] == {
+        "path": str(audio_path.resolve()),
+        "relative": False,
+    }
+    assert load_project(project_path).audio_path == audio_path.resolve()

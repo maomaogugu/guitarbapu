@@ -8,7 +8,7 @@ import pytest
 
 from src.audio.demucs_separator import DemucsConfig, DemucsSeparator
 from src.audio.separation_cache import SeparationCache
-from src.audio.separator import SeparationCancelled, SeparationError
+from src.audio.separator import SeparationCancelled, SeparationError, Stem
 
 
 class _FakeModel:
@@ -156,3 +156,36 @@ def test_reused_backend_refreshes_progress_and_cancel_callback(tmp_path):
 
     assert cancelled.is_set()
     assert len(first_progress) == first_count
+
+
+def test_cache_commit_replaces_incomplete_entry(tmp_path):
+    cache = SeparationCache(tmp_path / "cache")
+    source = _source(tmp_path)
+    key = cache.key_for(source, {"model": "broken"})
+    broken = cache.entry_path(key)
+    broken.mkdir(parents=True)
+    (broken / "metadata.json").write_text("{broken", encoding="utf-8")
+
+    work = cache.create_work_directory(key)
+    stem_path = work / "guitar.wav"
+    stem_path.write_bytes(b"stem")
+    result = cache.commit(
+        key,
+        work,
+        source_path=source,
+        model_name="htdemucs_6s",
+        device="cpu",
+        stems=(
+            Stem(
+                name="guitar",
+                path=stem_path,
+                sample_rate=44_100,
+                channels=2,
+                duration=1.0,
+            ),
+        ),
+    )
+
+    assert result.from_cache is False
+    assert result.stem("guitar").path.read_bytes() == b"stem"
+    assert cache.load(key) is not None

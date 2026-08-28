@@ -310,14 +310,14 @@ class TabEditController:
         """Move an event to another legal position for the same pitch."""
 
         event = self._event(index)
+        start_beat, duration_beats = self._event_beats(event)
         return self.update_event(
             index,
             midi=self._event_midi(event),
             string=position.string,
             fret=position.fret,
-            start_beat=event.start_beat or 0.0,
-            duration_beats=event.duration_beats
-            or 1.0 / self.tablature.subdivision,
+            start_beat=start_beat,
+            duration_beats=duration_beats,
             technique=event.technique,
         )
 

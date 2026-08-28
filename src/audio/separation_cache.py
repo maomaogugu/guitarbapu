@@ -129,11 +129,30 @@ class SeparationCache:
         target = self.entry_path(cache_key)
         if target.exists():
             cached = self.load(cache_key)
-            shutil.rmtree(work)
             if cached is not None:
+                shutil.rmtree(work, ignore_errors=True)
                 return cached
-            raise SeparationError("已有的分离缓存不完整")
-        work.replace(target)
+            # A previous crashed commit can leave an unreadable entry behind.
+            # Remove that incomplete entry instead of blocking this audio forever.
+            shutil.rmtree(target, ignore_errors=True)
+        try:
+            work.replace(target)
+        except OSError as exc:
+            cached = self.load(cache_key)
+            if cached is not None:
+                shutil.rmtree(work, ignore_errors=True)
+                return cached
+            if target.exists():
+                # Windows refuses to replace an existing directory; if the winner
+                # is still unreadable, clear it and retry this commit once.
+                shutil.rmtree(target, ignore_errors=True)
+                try:
+                    work.replace(target)
+                except OSError as retry_exc:
+                    raise SeparationError("分离缓存提交失败") from retry_exc
+            else:
+                shutil.rmtree(work, ignore_errors=True)
+                raise SeparationError("分离缓存提交失败") from exc
         loaded = self.load(cache_key)
         if loaded is None:
             raise SeparationError("分离缓存提交后无法读取")
