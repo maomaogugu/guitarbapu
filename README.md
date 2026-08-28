@@ -83,6 +83,8 @@ chosen = fretboard.choose_position(note)    # 基础低品位策略
 python -m src.gui.app
 ```
 
+GUI 已可导入 WAV、MP3 或 FLAC，并通过“开始分析”显示基础单音检测结果。当前结果是 `Note` 列表而非完整 TAB；它适合测试清晰的单音吉他录音，不适合直接分析完整歌曲或和弦。
+
 运行自动化检查：
 
 ```bash

@@ -1,7 +1,7 @@
 """Main window for the GuitarBapu desktop application.
 
-This module owns only presentation and user interaction. Audio decoding and
-analysis remain extension points in :mod:`src.audio` for a later stage.
+This module owns only presentation and user interaction. It calls the public
+audio services but does not contain decoding or pitch-analysis logic.
 """
 
 from __future__ import annotations
@@ -23,7 +23,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.audio.loader import load_audio
+from src.audio.analyzer import AudioAnalyzer
+from src.audio.loader import AudioData, load_audio
 
 
 class MainWindow(QMainWindow):
@@ -34,6 +35,7 @@ class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.selected_file: Path | None = None
+        self.audio: AudioData | None = None
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -79,11 +81,11 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
 
-        tab_group = QGroupBox("TAB 结果")
+        tab_group = QGroupBox("检测到的音符（基础版）")
         tab_layout = QVBoxLayout(tab_group)
         self.tab_output = QPlainTextEdit()
         self.tab_output.setReadOnly(True)
-        self.tab_output.setPlaceholderText("分析完成后，TAB 结果将在这里显示")
+        self.tab_output.setPlaceholderText("分析完成后，识别到的音符将在这里显示")
         tab_layout.addWidget(self.tab_output)
         layout.addWidget(tab_group, stretch=1)
 
@@ -106,11 +108,13 @@ class MainWindow(QMainWindow):
             audio = load_audio(self.selected_file)
         except (OSError, ValueError, RuntimeError) as error:
             self.selected_file = None
+            self.audio = None
             self.file_label.setText("尚未选择音频文件")
             self.status_label.setText(f"音频读取失败：{error}")
             self.analyze_button.setEnabled(False)
             return
 
+        self.audio = audio
         self.file_label.setText(
             f"文件名：{self.selected_file.name}\n"
             f"时长：{audio.duration:.2f} 秒\n"
@@ -120,13 +124,37 @@ class MainWindow(QMainWindow):
         self.analyze_button.setEnabled(True)
 
     def _start_analysis(self) -> None:
-        """Update the status without invoking an analysis implementation."""
+        """Run the Phase 2 monophonic analyzer and show detected note events."""
 
-        if self.selected_file is None:
+        if self.audio is None:
             self.status_label.setText("请先导入音频文件")
             return
 
-        self.status_label.setText("分析功能尚未实现")
+        self.analyze_button.setEnabled(False)
+        self.tab_output.clear()
+        self.status_label.setText("正在进行基础单音音高检测，请稍候…")
+        QApplication.processEvents()
+        try:
+            analysis = AudioAnalyzer().analyze(self.audio)
+        except (RuntimeError, ValueError) as error:
+            self.status_label.setText(f"音高检测失败：{error}")
+            return
+        finally:
+            self.analyze_button.setEnabled(True)
+
+        if not analysis.notes:
+            self.status_label.setText("分析完成：未检测到可用的单音音符")
+            self.tab_output.setPlainText("未检测到音符。请尝试单音、较清晰的吉他录音。")
+            return
+
+        lines = [
+            f"{note.name:<4} MIDI={note.midi:<3} 开始={note.start:.2f}s 时长={note.duration:.2f}s"
+            for note in analysis.notes
+        ]
+        self.tab_output.setPlainText("\n".join(lines))
+        self.status_label.setText(
+            f"分析完成：检测到 {len(analysis.notes)} 个基础音符事件"
+        )
 
 
 def main() -> int:

@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 import math
+import sys
 from typing import Any, Mapping
 
 import numpy as np
@@ -9,6 +10,34 @@ import numpy as np
 from ..music.note import Note
 
 from .loader import AudioData
+
+
+def _import_librosa():
+    """Import librosa, applying a Python 3.14 numba-cache workaround.
+
+    librosa 0.11 uses numba functions cached at import time.  The current
+    numba release cannot create that cache when running from the Python 3.14
+    framework installation, although the analysis itself works correctly.
+    Disabling only that optional cache keeps pitch detection available.
+    """
+
+    if sys.version_info >= (3, 14):
+        import numba.core.caching as numba_caching
+        import numba.core.dispatcher as numba_dispatcher
+        import numba.np.ufunc.ufuncbuilder as numba_ufuncbuilder
+        import numba.np.ufunc.wrappers as numba_wrappers
+
+        numba_dispatcher.FunctionCache = lambda function: numba_caching.NullCache()
+        numba_ufuncbuilder.FunctionCache = (
+            lambda function: numba_caching.NullCache()
+        )
+        numba_wrappers.GufWrapperCache = (
+            lambda **kwargs: numba_caching.NullCache()
+        )
+
+    import librosa
+
+    return librosa
 
 
 @dataclass(frozen=True)
@@ -71,7 +100,7 @@ class AudioAnalyzer:
             return np.empty(0, dtype=np.float32)
 
         try:
-            import librosa
+            librosa = _import_librosa()
         except Exception as exc:  # pragma: no cover - depends on environment
             raise RuntimeError("librosa is required for pitch detection") from exc
 
