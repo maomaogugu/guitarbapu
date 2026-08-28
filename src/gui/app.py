@@ -37,6 +37,7 @@ from PyQt6.QtWidgets import (
 from src.audio.analyzer import AudioAnalysis, AudioAnalyzer
 from src.audio.demucs_separator import DemucsConfig, DemucsSeparator
 from src.audio.loader import AudioData, load_audio
+from src.audio.polyphonic_analyzer import PolyphonicAudioAnalyzer
 from src.audio.separation_cache import SeparationCache
 from src.audio.separator import (
     SeparationCancelled,
@@ -170,10 +171,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(playback_group)
 
         analysis_row = QHBoxLayout()
+        mode_label = QLabel("分析模式：")
+        analysis_row.addWidget(mode_label)
+        self.analysis_mode_combo = QComboBox()
+        self.analysis_mode_combo.addItem("单音（推荐）", "monophonic")
+        self.analysis_mode_combo.addItem("和弦/复音（实验）", "polyphonic")
+        self.analysis_mode_combo.setToolTip(
+            "实验模式使用 CQT 同时检测最多 6 个吉他音高，"
+            "适合干净和弦，可能有泛音误检"
+        )
+        analysis_row.addWidget(self.analysis_mode_combo)
         self.separate_guitar_checkbox = QCheckBox("先分离吉他（Demucs）")
-        demucs_available = DemucsSeparator.is_available()
-        self.separate_guitar_checkbox.setEnabled(demucs_available)
-        if demucs_available:
+        self.demucs_available = DemucsSeparator.is_available()
+        self.separate_guitar_checkbox.setEnabled(self.demucs_available)
+        if self.demucs_available:
             device = DemucsSeparator.available_device().upper()
             self.separate_guitar_checkbox.setToolTip(
                 f"模型：htdemucs_6s；设备：{device}；"
@@ -433,6 +444,16 @@ class MainWindow(QMainWindow):
         self.tablature = project.tablature
         self.edit_controller = TabEditController(project.tablature)
         self.analysis_parameters = dict(project.analysis_parameters)
+        analysis_mode = str(
+            self.analysis_parameters.get("analysis_mode", "monophonic")
+        )
+        mode_index = self.analysis_mode_combo.findData(analysis_mode)
+        if mode_index >= 0:
+            self.analysis_mode_combo.setCurrentIndex(mode_index)
+        self.separate_guitar_checkbox.setChecked(
+            self.demucs_available
+            and bool(self.analysis_parameters.get("use_separation", False))
+        )
 
         audio_text = "未记录原音频"
         self.audio = None
@@ -458,6 +479,7 @@ class MainWindow(QMainWindow):
         self._apply_tablature(project.tablature)
         self.status_label.setText(
             f"项目已打开：{len(project.analysis.notes)} 个分析音符，"
+            f"{len(project.analysis.chords)} 个和弦，"
             f"{len(project.tablature.events)} 个 TAB 事件"
         )
 
@@ -474,31 +496,55 @@ class MainWindow(QMainWindow):
         self.analyze_button.setEnabled(False)
         self.import_button.setEnabled(False)
         self.open_project_button.setEnabled(False)
+        self.analysis_mode_combo.setEnabled(False)
+        self.separate_guitar_checkbox.setEnabled(False)
         self.cancel_analysis_button.setEnabled(True)
         self.analysis_progress.setVisible(True)
         self.analysis_progress.setRange(0, 0)
         self._clear_result(keep_project_path=True)
         use_separation = self.separate_guitar_checkbox.isChecked()
+        analysis_mode = str(self.analysis_mode_combo.currentData())
         if self.selected_file is not None:
             self._set_playback_sources(
                 {"原音频": (self.selected_file, self.audio)},
                 selected="原音频",
             )
-        self.status_label.setText(
-            "正在准备吉他分离；首次使用可能下载约 52 MB 模型…"
-            if use_separation
-            else "正在检测音高、清理音符并分析节奏，请稍候…"
-        )
-        analyzer = AudioAnalyzer()
-        self.analysis_parameters = {
-            "fmin_hz": analyzer.fmin_hz,
-            "fmax_hz": analyzer.fmax_hz,
-            "frame_length": analyzer.frame_length,
-            "hop_length": analyzer.hop_length,
-            "energy_threshold": analyzer.energy_threshold,
-            "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
-            "use_separation": use_separation,
-        }
+        mode_text = "和弦/复音" if analysis_mode == "polyphonic" else "单音"
+        if use_separation:
+            self.status_label.setText(
+                f"正在准备吉他分离和{mode_text}分析；"
+                "首次使用可能下载约 52 MB 模型…"
+            )
+        else:
+            self.status_label.setText(
+                f"正在进行{mode_text}音高、音符和节奏分析，请稍候…"
+            )
+        if analysis_mode == "polyphonic":
+            analyzer = PolyphonicAudioAnalyzer()
+            self.analysis_parameters = {
+                "analysis_mode": analysis_mode,
+                "min_midi": analyzer.min_midi,
+                "max_midi": analyzer.max_midi,
+                "hop_length": analyzer.hop_length,
+                "bins_per_semitone": analyzer.bins_per_semitone,
+                "energy_threshold": analyzer.energy_threshold,
+                "relative_pitch_threshold": analyzer.relative_pitch_threshold,
+                "max_polyphony": analyzer.max_polyphony,
+                "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "use_separation": use_separation,
+            }
+        else:
+            analyzer = AudioAnalyzer()
+            self.analysis_parameters = {
+                "analysis_mode": analysis_mode,
+                "fmin_hz": analyzer.fmin_hz,
+                "fmax_hz": analyzer.fmax_hz,
+                "frame_length": analyzer.frame_length,
+                "hop_length": analyzer.hop_length,
+                "energy_threshold": analyzer.energy_threshold,
+                "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "use_separation": use_separation,
+            }
         separator = None
         if use_separation:
             separator = DemucsSeparator(DemucsConfig(model_name="htdemucs_6s"))
@@ -572,6 +618,8 @@ class MainWindow(QMainWindow):
         self.analyze_button.setEnabled(self.audio is not None)
         self.import_button.setEnabled(True)
         self.open_project_button.setEnabled(True)
+        self.analysis_mode_combo.setEnabled(True)
+        self.separate_guitar_checkbox.setEnabled(self.demucs_available)
         self.cancel_analysis_button.setEnabled(False)
         self.analysis_progress.setVisible(False)
         self.analysis_future = None
@@ -642,9 +690,10 @@ class MainWindow(QMainWindow):
         tablature: Tablature | None = None,
     ) -> None:
         if not analysis.notes:
-            self.status_label.setText("分析完成：未检测到可用的单音音符")
+            self.status_label.setText("分析完成：未检测到可用的音符")
             self.tab_output.setPlainText(
-                "未检测到音符。请尝试单音、较清晰的吉他录音。"
+                "未检测到音符。请尝试较清晰的吉他录音，"
+                "或切换单音/和弦分析模式。"
             )
             return
         if tablature is None:
@@ -657,10 +706,20 @@ class MainWindow(QMainWindow):
         self.tablature = tablature
         self.edit_controller = TabEditController(tablature)
         self._apply_tablature(tablature)
+        if analysis.chords:
+            summary = (
+                f"分析完成：{len(analysis.notes)} 个复音音符，"
+                f"{len(analysis.chords)} 个和弦"
+            )
+        else:
+            summary = (
+                f"分析完成：{len(analysis.raw_notes)} 个原始事件清理为 "
+                f"{len(analysis.notes)} 个音符"
+            )
         self.status_label.setText(
-            f"分析完成：{len(analysis.raw_notes)} 个原始事件清理为 "
-            f"{len(analysis.notes)} 个音符；TAB 映射 {len(tablature.events)} 个，"
-            f"未映射 {len(tablature.unmapped_notes)} 个"
+            summary
+            + f"；TAB 映射 {len(tablature.events)} 个，"
+            + f"未映射 {len(tablature.unmapped_notes)} 个"
         )
 
     def _apply_tablature(
@@ -684,9 +743,23 @@ class MainWindow(QMainWindow):
         detail_lines = [
             "TAB 事件详情",
             f"原始音符：{len(analysis.raw_notes)}  清理后：{len(analysis.notes)}",
+            f"识别和弦：{len(analysis.chords)}",
             f"节拍：{tempo_text}",
             "",
         ]
+        if analysis.chords:
+            detail_lines.append("和弦检测（实验）")
+            for chord in analysis.chords:
+                confidence = (
+                    f" 可信度={chord.confidence:.0%}"
+                    if chord.confidence is not None
+                    else ""
+                )
+                detail_lines.append(
+                    f"{chord.name:<8} 音高={','.join(str(midi) for midi in chord.midis)} "
+                    f"开始={chord.start:.2f}s 时长={chord.duration:.2f}s{confidence}"
+                )
+            detail_lines.append("")
         for event in tablature.events:
             midi = self._event_midi(event, tablature)
             name = event.note.name if event.note is not None else f"MIDI {midi}"

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
+from typing import Protocol
 
 from src.music.tab import Tablature
 from src.music.tab_generator import TabGenerator
@@ -19,6 +20,11 @@ from .separator import (
     SeparationResult,
     Separator,
 )
+
+
+class Analyzer(Protocol):
+    def analyze(self, audio: AudioData) -> AudioAnalysis:
+        """Return an analysis compatible with TAB generation."""
 
 
 @dataclass(frozen=True)
@@ -36,7 +42,7 @@ class TranscriptionService:
     def __init__(
         self,
         *,
-        analyzer: AudioAnalyzer | None = None,
+        analyzer: Analyzer | None = None,
         tab_generator: TabGenerator | None = None,
         separator: Separator | None = None,
     ) -> None:

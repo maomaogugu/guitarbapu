@@ -28,10 +28,14 @@ class FingeringOptimizer:
         guitar: Guitar | None = None,
         *,
         weights: FingeringWeights | None = None,
+        max_group_candidates: int = 96,
     ) -> None:
+        if max_group_candidates < 1:
+            raise ValueError("max_group_candidates must be positive")
         self.guitar = guitar or Guitar.standard()
         self.fretboard = Fretboard(self.guitar)
         self.weights = weights or FingeringWeights()
+        self.max_group_candidates = int(max_group_candidates)
 
     def _base_cost(self, position: FretPosition) -> float:
         cost = position.fret * self.weights.fret_height
@@ -172,7 +176,18 @@ class FingeringOptimizer:
             if len(strings) == len(set(strings)):
                 assignments.append(tuple(assignment))
         if assignments:
-            return tuple(assignments)
+            assignments.sort(
+                key=lambda assignment: (
+                    self._group_cost(assignment),
+                    tuple(
+                        (position.fret, position.string)
+                        if position is not None
+                        else (999, 999)
+                        for position in assignment
+                    ),
+                )
+            )
+            return tuple(assignments[: self.max_group_candidates])
         return (tuple(None for _ in notes),)
 
     def optimize_groups(

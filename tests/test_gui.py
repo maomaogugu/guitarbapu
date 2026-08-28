@@ -23,6 +23,7 @@ from src.audio.separator import (
 )
 from src.audio.transcription_service import TranscriptionResult
 from src.gui.app import MainWindow
+from src.music.chord import Chord
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
 from src.music.timing import QuantizedNote, Rest, TimingInfo
@@ -376,5 +377,52 @@ def test_project_save_keeps_original_audio_after_stem_playback(
 
     assert window._save_project()
     assert load_project(project_path).audio_path == original_path
+    window.close()
+    app.processEvents()
+
+
+def test_gui_displays_experimental_chord_summary():
+    app = QApplication.instance() or QApplication([])
+    notes = tuple(Note(midi, start=0.0, duration=1.0) for midi in (48, 52, 55))
+    analysis = AudioAnalysis(
+        duration_seconds=1.0,
+        sample_rate=44_100,
+        notes=notes,
+        raw_notes=notes,
+        chords=(Chord.from_midis((48, 52, 55), duration=1.0),),
+    )
+    window = MainWindow()
+
+    window._show_analysis(analysis)
+
+    assert "1 个和弦" in window.status_label.text()
+    assert "和弦检测（实验）" in window.tab_output.toPlainText()
+    assert "C" in window.tab_output.toPlainText()
+    assert window.event_table.rowCount() == 3
+    window.close()
+    app.processEvents()
+
+
+def test_gui_polyphonic_mode_builds_polyphonic_analyzer(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    audio_path = tmp_path / "chord.wav"
+    sf.write(audio_path, np.zeros(1000, dtype=np.float32), 1000)
+    captured = {}
+    window = MainWindow()
+    window._set_audio_source(audio_path, load_audio(audio_path))
+    window.analysis_mode_combo.setCurrentIndex(
+        window.analysis_mode_combo.findData("polyphonic")
+    )
+
+    def fake_submit(function, *args, **kwargs):
+        captured["analyzer"] = function.__self__.analyzer
+        return Future()
+
+    monkeypatch.setattr(window.analysis_executor, "submit", fake_submit)
+    window._start_analysis()
+
+    assert captured["analyzer"].__class__.__name__ == "PolyphonicAudioAnalyzer"
+    assert window.analysis_parameters["analysis_mode"] == "polyphonic"
+    assert window.analysis_parameters["max_polyphony"] == 6
     window.close()
     app.processEvents()

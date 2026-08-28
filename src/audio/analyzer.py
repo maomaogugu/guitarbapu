@@ -6,6 +6,7 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ..music.chord import Chord
 from ..music.note import Note
 from ..music.note_processor import NoteProcessor
 
@@ -24,6 +25,7 @@ class AudioAnalysis:
     notes: tuple[Note, ...] = field(default_factory=tuple)
     raw_notes: tuple[Note, ...] = field(default_factory=tuple)
     rhythm: RhythmAnalysis | None = None
+    chords: tuple[Chord, ...] = field(default_factory=tuple)
 
 
 class AudioAnalyzer:

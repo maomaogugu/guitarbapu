@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from ..audio.analyzer import AudioAnalysis
 from ..audio.rhythm import RhythmAnalysis
+from ..music.chord import Chord
 from ..music.guitar import Guitar, GuitarString
 from ..music.note import Note
 from ..music.tab import TabEvent, TabRest, Tablature, UnmappedNote
@@ -46,6 +47,34 @@ def _note_from_dict(data: Mapping[str, Any]) -> Note:
             if data.get("frequency_hz") is None
             else float(data["frequency_hz"])
         ),
+        confidence=(
+            None if data.get("confidence") is None else float(data["confidence"])
+        ),
+    )
+
+
+def _chord_to_dict(chord: Chord) -> dict[str, Any]:
+    return {
+        "midis": list(chord.midis),
+        "start": chord.start,
+        "duration": chord.duration,
+        "root_pitch_class": chord.root_pitch_class,
+        "quality": chord.quality,
+        "confidence": chord.confidence,
+    }
+
+
+def _chord_from_dict(data: Mapping[str, Any]) -> Chord:
+    return Chord(
+        midis=tuple(int(value) for value in data["midis"]),
+        start=float(data.get("start", 0.0)),
+        duration=float(data.get("duration", 0.0)),
+        root_pitch_class=(
+            None
+            if data.get("root_pitch_class") is None
+            else int(data["root_pitch_class"])
+        ),
+        quality=(None if data.get("quality") is None else str(data["quality"])),
         confidence=(
             None if data.get("confidence") is None else float(data["confidence"])
         ),
@@ -343,6 +372,7 @@ def project_to_dict(
             "raw_notes": [
                 _note_to_dict(note) for note in project.analysis.raw_notes
             ],
+            "chords": [_chord_to_dict(chord) for chord in project.analysis.chords],
             "rhythm": _rhythm_to_dict(project.analysis.rhythm),
         },
         "tablature": _tablature_to_dict(project.tablature),
@@ -403,6 +433,10 @@ def load_project(path: str | Path) -> TranscriptionProject:
                 for item in analysis_data.get("raw_notes", ())
             ),
             rhythm=_rhythm_from_dict(analysis_data.get("rhythm")),
+            chords=tuple(
+                _chord_from_dict(item)
+                for item in analysis_data.get("chords", ())
+            ),
         )
         parameters = payload.get("analysis_parameters", {})
         if not isinstance(parameters, Mapping):

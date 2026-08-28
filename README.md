@@ -2,7 +2,7 @@
 
 GuitarBapu 是一款面向吉他手的 AI 吉他扒谱软件，目标是将音频中的吉他演奏转换为可编辑、可导出的音符和六线谱，帮助用户更快学习和整理歌曲。
 
-当前版本已经具备可用的基础单音扒谱工作流：导入和播放音频、可选分离吉他 stem、查看波形、检测音高、清理误检、估计节拍、量化时值、选择琴弦/品位、生成并编辑六线谱，以及保存项目或导出 TXT、MIDI 和 MusicXML。复音歌曲和高级演奏技巧识别仍在后续阶段。
+当前版本已经具备可用的基础单音扒谱工作流，并增加了实验性和弦/复音模式：导入和播放音频、可选分离吉他 stem、查看波形、检测音高、清理误检、估计节拍、量化时值、选择琴弦/品位、生成并编辑六线谱，以及保存项目或导出 TXT、MIDI 和 MusicXML。高级复音歌曲和演奏技巧识别仍在后续阶段。
 
 ## 项目结构
 
@@ -50,7 +50,7 @@ python -m pytest
 
 ## 当前开发阶段
 
-Phase 8（可选吉他音源分离基础版）已经完成。Audio Loader 可读取 MP3、WAV 和 FLAC；完整歌曲可先使用 Demucs `htdemucs_6s` 的真实 `guitar` stem 分离后再进入既有单音分析和 TAB 生成流程。桌面界面可在原音频与吉他分离轨之间切换播放，并保留 Phase 7 的波形定位、循环选区、TAB 编辑、项目持久化和导出功能。
+Phase 9A（实验性和弦/复音识别）已完成基础版。Audio Loader 可读取 MP3、WAV 和 FLAC；完整歌曲可先使用 Demucs `htdemucs_6s` 分离真实 `guitar` stem，再选择稳定的单音分析，或使用 CQT 的实验性和弦/复音分析。复音模式会将同一时段的多个音高映射到不同琴弦，并保留 Phase 7/8 的播放、编辑、项目持久化和导出功能。
 
 ### 音高检测示例
 
@@ -108,7 +108,7 @@ print(TextTabRenderer().render(tablature))
 
 TAB 默认采用 4/4、每拍四等分、每行四小节。指法选择使用动态规划，综合考虑低品位、换把距离、跨弦距离和和弦品位跨度。无法映射的音符会在六条弦上显示 `x`，并在结果末尾给出警告，不会被静默丢弃。
 
-同一拍的多个 `Note` 可以作为结构化和弦分配到不同琴弦，但当前音高分析器仍是单音算法；这项结构能力是为后续复音识别预留的。
+同一拍的多个 `Note` 可以作为结构化和弦分配到不同琴弦。默认 YIN 模式仍为稳定的单音算法；Phase 9A 实验模式可以向该结构提供同时音符。
 
 ### Phase 6 项目保存与导出
 
@@ -180,12 +180,46 @@ macOS 缓存默认位于 `~/Library/Caches/GuitarBapu/separation`，不在 Git �
 - `guitar` stem 可能仍有人声、鼓或其他乐器泄漏，不保证完全干净；
 - 当前只保存请求的吉他 stem，不会把 `other` 假定为吉他；
 - 数据对象已支持多 stem 扩展，但当前不会自动拆分主音吉他和节奏吉他；
-- 后续音高分析仍是单音算法，分离可以减少干扰，但不等于已经实现和弦/复音识别。
+- 分离只负责提取吉他 stem；选择单音或实验性复音分析后，结果仍受后续音高算法准确率限制。
+
+### Phase 9A 实验性和弦/复音识别
+
+GUI 的“分析模式”提供两个选项：
+
+- **单音（推荐）**：使用现有 YIN 流程，适合 Solo、音阶、单音 riff 和调音录音；
+- **和弦/复音（实验）**：使用 CQT 频谱、onset 分段、相对能量阈值和泛音抑制，每个时段最多保留 6 个吉他音高。
+
+实验模式目前识别 major、minor、power chord、sus2、sus4、diminished 和 augmented 的基础标签。标签无法确定时仍保留检测到的具体 MIDI 音高，不会丢弃数据。
+
+```python
+from src.audio.loader import load_audio
+from src.audio.polyphonic_analyzer import PolyphonicAudioAnalyzer
+from src.music.tab_generator import TabGenerator
+
+analysis = PolyphonicAudioAnalyzer().analyze(load_audio("clean-chords.wav"))
+for chord in analysis.chords:
+    print(chord.name, chord.midis, chord.start, chord.confidence)
+
+tablature = TabGenerator().generate(analysis)
+```
+
+复音结果会保存到 `.guitarbapu.json`，旧项目没有 `chords` 字段时仍可正常打开。指法优化器会限制每个和弦的候选指法数，防止连续和弦产生组合爆炸。
+
+已知限制：
+
+- 这是无新增大型模型的确定性基线，不是经训练的高精度复音 AI；
+- 干净、延音较稳定的和弦效果最好，快速闷音、强失真和密集混音可能误检；
+- 吉他泛音和真实高八度音在频谱上可能难以区分；
+- 和弦转位和根音存在听觉歧义，当前优先尝试以最低检测音为根音；
+- 还不支持七和弦、九和弦、分数和弦或乐队级和声分析；
+- 实验结果应在 GUI 中试听并人工修正。
 
 ## 后续规划
 
-1. 使用有授权的真实歌曲/分轨素材建立 Phase 8 评测集，记录分离耗时、泄漏和后续音高准确率。
-2. Phase 9：复音识别、主音/节奏轨分类、技巧识别、安装包和产品化。
+1. 使用有授权的真实吉他和弦建立 Phase 9A 评测集，记录每和弦音高/标签/TAB 准确率。
+2. Phase 9B：主音/节奏轨分类和多轨管理。
+3. Phase 9C：滑弦、击勾弦、推弦和颤音识别。
+4. Phase 9D：安装包、模型下载 UI、日志诊断和跨平台产品化。
 
 ## 运行项目
 
@@ -199,7 +233,7 @@ macOS 也可以在 Finder 中双击 `run_app.command`。GUI 会在后台分析�
 
 `run_app.command` 会优先使用项目中的 `.venv/bin/python`，因此可选 Demucs 依赖安装到 `.venv` 后，双击启动也能正确识别。
 
-当前结果适合清晰的吉他单音、音阶和调音录音。完整歌曲、和弦识别、推弦/滑弦等技巧以及图形化编辑不属于当前算法能力。
+当前单音模式适合清晰的吉他 Solo、音阶和调音录音；实验性复音模式适合干净、稳定的和弦。真实混音的高精度复音识别、推弦/滑弦等技巧以及图形化编辑仍属于后续能力。
 
 运行自动化检查：
 

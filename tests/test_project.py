@@ -7,6 +7,7 @@ import pytest
 
 from src.audio.analyzer import AudioAnalysis
 from src.audio.rhythm import RhythmAnalysis
+from src.music.chord import Chord
 from src.music.guitar import Guitar
 from src.music.note import Note
 from src.music.tab import TabEvent, TabRest, Tablature, UnmappedNote
@@ -54,6 +55,7 @@ def _project(audio_path):
             ),
             rests=(Rest(0.0, 0.5, 0.0, 1.0),),
         ),
+        chords=(Chord.from_midis((48, 52, 55), start=0.5, duration=0.5),),
     )
     tablature = Tablature(
         guitar=Guitar.standard(capo=1),
@@ -100,6 +102,7 @@ def test_project_json_round_trip_uses_relative_audio_reference(tmp_path):
     assert loaded.audio_path == audio_path.resolve()
     assert loaded.analysis.notes == _project(audio_path).analysis.notes
     assert loaded.analysis.rhythm == _project(audio_path).analysis.rhythm
+    assert loaded.analysis.chords == _project(audio_path).analysis.chords
     assert loaded.analysis.features == {}
     assert loaded.tablature == _project(audio_path).tablature
     assert loaded.analysis_parameters["fmin_hz"] == 65.41
@@ -115,6 +118,19 @@ def test_project_can_open_when_referenced_audio_is_missing(tmp_path):
     assert loaded.audio_path == missing_audio.resolve()
     assert not loaded.audio_path.exists()
     assert loaded.tablature.events[0].fret == 4
+
+
+def test_project_without_chords_field_remains_backward_compatible(tmp_path):
+    project_path = tmp_path / "legacy-project.json"
+    save_project(_project(None), project_path)
+    payload = json.loads(project_path.read_text(encoding="utf-8"))
+    payload["analysis"].pop("chords")
+    project_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    loaded = load_project(project_path)
+
+    assert loaded.analysis.chords == ()
+    assert loaded.analysis.notes
 
 
 def test_project_rejects_unknown_schema_version(tmp_path):

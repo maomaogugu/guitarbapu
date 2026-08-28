@@ -40,3 +40,13 @@ def test_chord_conflict_maps_what_is_playable_and_marks_one_missing():
 
     assert sum(position is not None for position in result) == 1
     assert sum(position is None for position in result) == 1
+
+
+def test_chord_candidates_are_pruned_before_sequence_optimization():
+    optimizer = FingeringOptimizer(max_group_candidates=8)
+
+    assignments = optimizer._group_assignments(
+        tuple(Note(midi) for midi in (48, 52, 55, 60, 64, 67))
+    )
+
+    assert 1 <= len(assignments) <= 8
