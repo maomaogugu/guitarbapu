@@ -40,7 +40,11 @@ def test_pitch_track_filters_quiet_frames_and_merges_notes(monkeypatch):
         duration=16 / 8000,
         channels=1,
     )
-    analyzer = AudioAnalyzer(frame_length=4, hop_length=2)
+    analyzer = AudioAnalyzer(
+        frame_length=4,
+        hop_length=2,
+        min_note_duration=0,
+    )
 
     pitches = analyzer.detect_pitch(audio)
     notes = analyzer.detect_notes(audio)
@@ -60,10 +64,18 @@ def test_analyze_returns_notes_and_pitch_feature(monkeypatch):
     monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
     audio = AudioData(np.ones(8), 8000, 8 / 8000, 1)
 
-    result = AudioAnalyzer(frame_length=4, hop_length=2).analyze(audio)
+    result = AudioAnalyzer(
+        frame_length=4,
+        hop_length=2,
+        min_note_duration=0,
+    ).analyze(audio)
 
     assert result.sample_rate == 8000
-    assert result.notes == (Note(midi=69, duration=2 / 8000),)
+    assert [note.midi for note in result.notes] == [69]
+    assert result.notes[0].duration == pytest.approx(2 / 8000)
+    assert result.notes[0].frequency_hz == pytest.approx(440.0)
+    assert result.raw_notes == result.notes
+    assert result.rhythm is not None
     assert result.features["pitch_hz"].shape == (1,)
 
 

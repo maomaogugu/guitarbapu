@@ -19,6 +19,8 @@ class Note:
     start: float = 0.0
     duration: float = 0.0
     velocity: int = 100
+    frequency_hz: float | None = None
+    confidence: float | None = None
 
     @classmethod
     def from_frequency(
@@ -34,7 +36,13 @@ class Note:
         if not math.isfinite(frequency) or frequency <= 0:
             raise ValueError("frequency must be a finite positive number")
         midi = int(round(69 + 12 * math.log2(frequency / 440.0)))
-        return cls(midi=midi, start=start, duration=duration, velocity=velocity)
+        return cls(
+            midi=midi,
+            start=start,
+            duration=duration,
+            velocity=velocity,
+            frequency_hz=float(frequency),
+        )
 
     @property
     def frequency(self) -> float:
@@ -56,3 +64,9 @@ class Note:
             raise ValueError("start and duration must be non-negative")
         if not 0 <= self.velocity <= 127:
             raise ValueError("velocity must be between 0 and 127")
+        if self.frequency_hz is not None and (
+            not math.isfinite(self.frequency_hz) or self.frequency_hz <= 0
+        ):
+            raise ValueError("frequency_hz must be finite and positive")
+        if self.confidence is not None and not 0 <= self.confidence <= 1:
+            raise ValueError("confidence must be between 0 and 1")

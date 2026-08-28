@@ -2,42 +2,16 @@
 
 from dataclasses import dataclass, field
 import math
-import sys
 from typing import Any, Mapping
 
 import numpy as np
 
 from ..music.note import Note
+from ..music.note_processor import NoteProcessor
 
+from .librosa_compat import import_librosa
 from .loader import AudioData
-
-
-def _import_librosa():
-    """Import librosa, applying a Python 3.14 numba-cache workaround.
-
-    librosa 0.11 uses numba functions cached at import time.  The current
-    numba release cannot create that cache when running from the Python 3.14
-    framework installation, although the analysis itself works correctly.
-    Disabling only that optional cache keeps pitch detection available.
-    """
-
-    if sys.version_info >= (3, 14):
-        import numba.core.caching as numba_caching
-        import numba.core.dispatcher as numba_dispatcher
-        import numba.np.ufunc.ufuncbuilder as numba_ufuncbuilder
-        import numba.np.ufunc.wrappers as numba_wrappers
-
-        numba_dispatcher.FunctionCache = lambda function: numba_caching.NullCache()
-        numba_ufuncbuilder.FunctionCache = (
-            lambda function: numba_caching.NullCache()
-        )
-        numba_wrappers.GufWrapperCache = (
-            lambda **kwargs: numba_caching.NullCache()
-        )
-
-    import librosa
-
-    return librosa
+from .rhythm import RhythmAnalysis, RhythmAnalyzer
 
 
 @dataclass(frozen=True)
@@ -48,6 +22,8 @@ class AudioAnalysis:
     sample_rate: int
     features: Mapping[str, Any] = field(default_factory=dict)
     notes: tuple[Note, ...] = field(default_factory=tuple)
+    raw_notes: tuple[Note, ...] = field(default_factory=tuple)
+    rhythm: RhythmAnalysis | None = None
 
 
 class AudioAnalyzer:
@@ -61,6 +37,11 @@ class AudioAnalyzer:
         frame_length: int = 2048,
         hop_length: int = 512,
         energy_threshold: float = 0.1,
+        min_note_duration: float = 0.08,
+        merge_gap: float = 0.08,
+        blip_max_duration: float = 0.06,
+        min_onset_segment: float = 0.15,
+        beat_subdivision: int = 4,
     ) -> None:
         if not 0 < fmin_hz < fmax_hz:
             raise ValueError("fmin_hz must be positive and lower than fmax_hz")
@@ -76,6 +57,16 @@ class AudioAnalyzer:
         self.frame_length = int(frame_length)
         self.hop_length = int(hop_length)
         self.energy_threshold = float(energy_threshold)
+        self.note_processor = NoteProcessor(
+            min_note_duration=min_note_duration,
+            merge_gap=merge_gap,
+            blip_max_duration=blip_max_duration,
+            min_onset_segment=min_onset_segment,
+        )
+        self.rhythm_analyzer = RhythmAnalyzer(
+            hop_length=self.hop_length,
+            subdivision=beat_subdivision,
+        )
 
     @staticmethod
     def _waveform(audio: AudioData) -> np.ndarray:
@@ -100,7 +91,7 @@ class AudioAnalyzer:
             return np.empty(0, dtype=np.float32)
 
         try:
-            librosa = _import_librosa()
+            librosa = import_librosa()
         except Exception as exc:  # pragma: no cover - depends on environment
             raise RuntimeError("librosa is required for pitch detection") from exc
 
@@ -157,6 +148,34 @@ class AudioAnalyzer:
         active_midi: int | None = None
         active_start = 0.0
         active_end = 0.0
+        active_frequencies: list[float] = []
+
+        def append_active_note() -> None:
+            if active_midi is None:
+                return
+            frequency_hz = (
+                float(np.median(active_frequencies))
+                if active_frequencies
+                else None
+            )
+            confidence = None
+            if frequency_hz is not None and active_frequencies:
+                target = 440.0 * 2 ** ((active_midi - 69) / 12)
+                cents = np.asarray(
+                    [1200 * math.log2(value / target) for value in active_frequencies]
+                )
+                error = float(np.median(np.abs(cents)))
+                spread = float(np.std(cents))
+                confidence = max(0.0, min(1.0, 1.0 - (error + spread) / 100.0))
+            notes.append(
+                Note(
+                    midi=active_midi,
+                    start=active_start,
+                    duration=max(0.0, active_end - active_start),
+                    frequency_hz=frequency_hz,
+                    confidence=confidence,
+                )
+            )
 
         for index, frequency in enumerate(frequencies):
             midi: int | None = None
@@ -169,44 +188,47 @@ class AudioAnalyzer:
             frame_start = index * frame_duration
             frame_end = frame_start + frame_duration
             if midi != active_midi:
-                if active_midi is not None:
-                    notes.append(
-                        Note(
-                            midi=active_midi,
-                            start=active_start,
-                            duration=max(0.0, active_end - active_start),
-                        )
-                    )
+                append_active_note()
                 active_midi = midi
                 active_start = frame_start
+                active_frequencies = []
             if midi is not None:
                 active_end = frame_end
+                active_frequencies.append(float(frequency))
 
-        if active_midi is not None:
-            notes.append(
-                Note(
-                    midi=active_midi,
-                    start=active_start,
-                    duration=max(0.0, active_end - active_start),
-                )
-            )
+        append_active_note()
         return tuple(notes)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
         """Run pitch detection and convert it into ``Note`` events."""
 
-        return self._notes_from_frequencies(
+        raw_notes = self._notes_from_frequencies(
             self.detect_pitch(audio), audio.sample_rate
         )
+        return self.note_processor.process(raw_notes)
 
     def analyze(self, audio: AudioData) -> AudioAnalysis:
         """Analyze decoded audio and return pitch features plus note events."""
 
         frequencies = self.detect_pitch(audio)
-        notes = self._notes_from_frequencies(frequencies, audio.sample_rate)
+        raw_notes = self._notes_from_frequencies(frequencies, audio.sample_rate)
+        onset_times, timing = self.rhythm_analyzer.detect(audio)
+        notes = self.note_processor.process(raw_notes, onset_times=onset_times)
+        rhythm = self.rhythm_analyzer.build_analysis(
+            audio,
+            notes,
+            onset_times=onset_times,
+            timing=timing,
+        )
         return AudioAnalysis(
             duration_seconds=float(audio.duration),
             sample_rate=int(audio.sample_rate),
-            features={"pitch_hz": frequencies},
+            features={
+                "pitch_hz": frequencies,
+                "onset_times": np.asarray(onset_times, dtype=np.float32),
+                "tempo_bpm": timing.tempo_bpm,
+            },
             notes=notes,
+            raw_notes=raw_notes,
+            rhythm=rhythm,
         )

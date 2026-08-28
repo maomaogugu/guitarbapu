@@ -6,10 +6,11 @@ audio services but does not contain decoding or pitch-analysis logic.
 
 from __future__ import annotations
 
+from concurrent.futures import Future, ThreadPoolExecutor
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QTimer, Qt
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -23,7 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from src.audio.analyzer import AudioAnalyzer
+from src.audio.analyzer import AudioAnalysis, AudioAnalyzer
 from src.audio.loader import AudioData, load_audio
 
 
@@ -36,6 +37,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.selected_file: Path | None = None
         self.audio: AudioData | None = None
+        self.analysis_executor = ThreadPoolExecutor(max_workers=1)
+        self.analysis_future: Future | None = None
+        self.analysis_timer = QTimer(self)
+        self.analysis_timer.setInterval(100)
+        self.analysis_timer.timeout.connect(self._poll_analysis)
         self._build_ui()
 
     def _build_ui(self) -> None:
@@ -124,37 +130,101 @@ class MainWindow(QMainWindow):
         self.analyze_button.setEnabled(True)
 
     def _start_analysis(self) -> None:
-        """Run the Phase 2 monophonic analyzer and show detected note events."""
+        """Start Phase 4 analysis in a worker thread."""
 
         if self.audio is None:
             self.status_label.setText("请先导入音频文件")
             return
+        if self.analysis_future is not None:
+            return
 
         self.analyze_button.setEnabled(False)
+        self.import_button.setEnabled(False)
         self.tab_output.clear()
-        self.status_label.setText("正在进行基础单音音高检测，请稍候…")
-        QApplication.processEvents()
-        try:
-            analysis = AudioAnalyzer().analyze(self.audio)
-        except (RuntimeError, ValueError) as error:
-            self.status_label.setText(f"音高检测失败：{error}")
-            return
-        finally:
-            self.analyze_button.setEnabled(True)
+        self.status_label.setText("正在检测音高、清理音符并分析节奏，请稍候…")
+        self.analysis_future = self.analysis_executor.submit(
+            AudioAnalyzer().analyze,
+            self.audio,
+        )
+        self.analysis_timer.start()
 
-        if not analysis.notes:
+    def _poll_analysis(self) -> None:
+        future = self.analysis_future
+        if future is None or not future.done():
+            return
+        self.analysis_timer.stop()
+        try:
+            analysis = future.result()
+        except Exception as error:  # GUI boundary: report instead of crashing
+            self._show_analysis_error(str(error))
+        else:
+            self._show_analysis(analysis)
+        finally:
+            self._analysis_finished()
+
+    def _show_analysis_error(self, error: str) -> None:
+        self.status_label.setText(f"分析失败：{error}")
+
+    def _analysis_finished(self) -> None:
+        self.analyze_button.setEnabled(self.audio is not None)
+        self.import_button.setEnabled(True)
+        self.analysis_future = None
+
+    def _show_analysis(self, analysis: AudioAnalysis) -> None:
+        """Render a completed AudioAnalysis without performing audio work."""
+
+        notes = analysis.notes
+
+        if not notes:
             self.status_label.setText("分析完成：未检测到可用的单音音符")
             self.tab_output.setPlainText("未检测到音符。请尝试单音、较清晰的吉他录音。")
             return
 
+        rhythm = analysis.rhythm
+        tempo = rhythm.timing.tempo_bpm if rhythm is not None else None
+        tempo_text = f"{tempo:.1f} BPM" if tempo is not None else "未检测到稳定 BPM"
         lines = [
-            f"{note.name:<4} MIDI={note.midi:<3} 开始={note.start:.2f}s 时长={note.duration:.2f}s"
-            for note in analysis.notes
+            f"原始音符：{len(analysis.raw_notes)}  清理后：{len(notes)}",
+            f"节拍：{tempo_text}",
+            "",
         ]
+        quantized = rhythm.quantized_notes if rhythm is not None else ()
+        if quantized:
+            for item in quantized:
+                note = item.note
+                beat_text = ""
+                if item.start_beat is not None and item.duration_beats is not None:
+                    beat_text = (
+                        f" 拍={item.start_beat:.2f} 时值={item.duration_beats:.2f}拍"
+                    )
+                confidence = (
+                    f" 可信度={item.source.confidence:.0%}"
+                    if item.source.confidence is not None
+                    else ""
+                )
+                lines.append(
+                    f"{note.name:<4} MIDI={note.midi:<3} "
+                    f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
+                    f"{beat_text}{confidence}"
+                )
+        else:
+            lines.extend(
+                f"{note.name:<4} MIDI={note.midi:<3} "
+                f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
+                for note in notes
+            )
         self.tab_output.setPlainText("\n".join(lines))
         self.status_label.setText(
-            f"分析完成：检测到 {len(analysis.notes)} 个基础音符事件"
+            f"分析完成：{len(analysis.raw_notes)} 个原始事件清理为 "
+            f"{len(notes)} 个音符，识别到 {len(rhythm.rests) if rhythm else 0} 个休止段"
         )
+
+    def closeEvent(self, event) -> None:
+        """Stop polling and release the background executor on window close."""
+
+        self.analysis_timer.stop()
+        self.analysis_executor.shutdown(wait=False, cancel_futures=True)
+        super().closeEvent(event)
 
 
 def main() -> int:

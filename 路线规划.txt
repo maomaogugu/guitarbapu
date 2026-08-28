@@ -99,8 +99,19 @@ Phase 3：Guitar Fretboard Mapping（基础版已完成）
 测试：覆盖标准调弦空弦、12 品八度、音符多位置、超出指板范围、连续旋律评分。
 阶段提交示例：feat: map notes to guitar fretboard positions。
 
-Phase 4：Timing 与 Note 清理
+Phase 4：Timing 与 Note 清理（已完成）
 目标：把逐帧检测结果变成稳定、可编辑的节奏事件，为 TAB 排版做准备。
+
+本阶段已完成：
+- 新增 NoteProcessor，支持 0.08 秒最短时长、短间隔同音合并、夹心抖动删除和单音重叠处理。
+- 使用 librosa 检测 onset 和 tempo；失败时保留秒级时间，不影响音高结果。
+- 新增 TimingInfo、QuantizedNote 和 Rest，默认量化到每拍四等分网格。
+- 保留 raw_notes、原始秒级时间、频率和基础置信度，量化结果不会覆盖来源数据。
+- 同音重复由可靠 onset 分割；跨小节事件支持 tie_to_next 标记。
+- GUI 已改为后台分析，并显示清理统计、BPM、拍位置、时值、休止段和置信度。
+- 真实 60 秒六弦调音录音由 70 个原始事件清理为 30 个正确事件，E2/A2/D3/G3/B3/E4 各 5 次。
+
+当前限制：自动拍号识别尚未实现，tempo 可能存在半拍/双拍歧义；完整和弦与复音不属于本阶段。
 
 实现顺序：
 1. 增加 onset/offset 检测，去掉 YIN 首尾边缘误检。
@@ -190,11 +201,11 @@ Phase 9：高级识别与产品化
 
 六、推荐的下一步
 ----------------
-当前最合理的下一阶段是 Phase 4，但建议先补齐 Phase 2 的真实音频集成测试。推荐顺序：
+当前最合理的下一阶段是 Phase 5：TAB Generator。推荐顺序：
 
-1. 准备 3-5 个短 WAV 样本（单音、静音、两音切换、带噪声）。
-2. 验证 AudioAnalyzer 的频率误差、起止时间和 Note 合并结果。
-3. 在 Phase 4 中实现 onset/offset、节拍估计和音符时值量化。
-4. 将清理后的 Note 序列接入 TabGenerator；GUI 和 Demucs 暂不提前实现。
+1. 扩展 TabEvent，使其关联 Note、FretPosition 和量化节拍。
+2. 将 AudioAnalysis.notes 交给 Fretboard.map_notes，生成稳定位置序列。
+3. 处理 rests、同一时间事件、小节线和无法映射的音符。
+4. 先实现可测试的文本 TAB 渲染器，再接入 GUI。
 
-当前不要做：一次性重写 loader、直接开发复杂 GUI、在没有评测样本时接入多个 AI 模型、为了导出格式提前破坏内部 Note/Tab 数据契约。
+当前不要做：一次性重写 loader、提前接入 Demucs、直接实现复杂复音模型、为了导出格式破坏 Note/Timing/Tab 数据契约。
