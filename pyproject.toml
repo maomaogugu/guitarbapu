@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "guitarbapu"
+version = "0.9.0"
+description = "AI-assisted guitar transcription and editable tablature"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "All rights reserved"}
+authors = [
+  {name = "maomaogugu", email = "2382021250@qq.com"},
+]
+dependencies = [
+  "numpy>=1.26,<3",
+  "librosa>=0.10,<1",
+  "soundfile>=0.12,<1",
+  "sounddevice>=0.4,<1",
+  "music21>=9,<10",
+  "PyQt6>=6.7,<7",
+]
+
+[project.optional-dependencies]
+separation = [
+  "torch>=2.1,<3",
+  "demucs>=4.1,<5",
+  "huggingface_hub>=0.24,<1",
+]
+dev = [
+  "pytest>=8,<9",
+  "pyinstaller>=6.10,<7",
+]
+
+[project.gui-scripts]
+guitarbapu = "src.gui.app:main"
+
+[tool.setuptools.packages.find]
+include = ["src", "src.*"]

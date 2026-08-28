@@ -6,10 +6,11 @@ from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 import sys
+import tempfile
 from threading import Event
 
-from PyQt6.QtCore import QTimer, Qt
-from PyQt6.QtGui import QFontDatabase
+from PyQt6.QtCore import QTimer, QUrl, Qt
+from PyQt6.QtGui import QAction, QDesktopServices, QFontDatabase
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -53,6 +54,7 @@ from src.audio.transcription_service import (
 from src.exporters import export_midi, export_musicxml, export_text_tab
 from src.gui.audio_player import AudioPlayer, format_seconds
 from src.gui.controller import TabEditController, TabEditError
+from src.gui.diagnostics_dialog import DiagnosticsDialog
 from src.gui.event_editor import EventEditorDialog
 from src.gui.waveform import WaveformWidget
 from src.music.tab import TabEvent, Tablature
@@ -66,6 +68,14 @@ from src.project import (
     load_project,
     save_project,
 )
+from src.utils.diagnostics import collect_diagnostics
+from src.utils.logger import (
+    configure_logging,
+    get_logger,
+    install_exception_hooks,
+)
+from src.utils.model_manager import OptionalModelManager
+from src.utils.paths import user_log_dir
 
 
 class MainWindow(QMainWindow):
@@ -87,6 +97,8 @@ class MainWindow(QMainWindow):
 
     def __init__(self) -> None:
         super().__init__()
+        self.logger = get_logger("gui")
+        self.model_manager = OptionalModelManager()
         self.selected_file: Path | None = None
         self.project_path: Path | None = None
         self.audio: AudioData | None = None
@@ -101,6 +113,7 @@ class MainWindow(QMainWindow):
         self.track_metadata_dirty = False
         self.analysis_parameters: dict[str, object] = {}
         self.analysis_executor = ThreadPoolExecutor(max_workers=1)
+        self.product_executor = ThreadPoolExecutor(max_workers=1)
         self.analysis_future: Future | None = None
         self.analysis_cancel_requested = False
         self.analysis_cancel_event: Event | None = None
@@ -110,9 +123,14 @@ class MainWindow(QMainWindow):
         self.analysis_timer = QTimer(self)
         self.analysis_timer.setInterval(100)
         self.analysis_timer.timeout.connect(self._poll_analysis)
+        self.model_future: Future | None = None
+        self.model_timer = QTimer(self)
+        self.model_timer.setInterval(200)
+        self.model_timer.timeout.connect(self._poll_model_preparation)
         self.audio_player = AudioPlayer(self)
         self._loop_selection: tuple[float, float] | None = None
         self._build_ui()
+        self._build_menus()
         self._connect_playback()
 
     def _build_ui(self) -> None:
@@ -195,9 +213,10 @@ class MainWindow(QMainWindow):
         self.separate_guitar_checkbox.setEnabled(self.demucs_available)
         if self.demucs_available:
             device = DemucsSeparator.available_device().upper()
+            model_status = self.model_manager.status()
             self.separate_guitar_checkbox.setToolTip(
                 f"模型：htdemucs_6s；设备：{device}；"
-                "首次使用可能下载约 52 MB；分离结果会自动缓存"
+                f"{model_status.summary}；分离结果会自动缓存"
             )
         else:
             self.separate_guitar_checkbox.setToolTip(
@@ -322,6 +341,98 @@ class MainWindow(QMainWindow):
         self._set_result_actions_enabled(False)
         self._set_playback_enabled(False)
         self._update_editor_actions()
+
+    def _build_menus(self) -> None:
+        help_menu = self.menuBar().addMenu("帮助")
+        self.diagnostics_action = QAction("系统诊断…", self)
+        self.diagnostics_action.triggered.connect(self._show_diagnostics)
+        help_menu.addAction(self.diagnostics_action)
+        self.prepare_model_action = QAction("准备 Demucs 模型…", self)
+        self.prepare_model_action.triggered.connect(self._prepare_demucs_model)
+        help_menu.addAction(self.prepare_model_action)
+        self.open_logs_action = QAction("打开日志目录", self)
+        self.open_logs_action.triggered.connect(self._open_log_directory)
+        help_menu.addAction(self.open_logs_action)
+
+    def _show_diagnostics(self) -> None:
+        diagnostics = collect_diagnostics(model_manager=self.model_manager)
+        DiagnosticsDialog(
+            diagnostics,
+            self,
+            log_dir=user_log_dir(),
+        ).exec()
+
+    def _open_log_directory(self) -> None:
+        directory = user_log_dir()
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+        except OSError as error:
+            self.logger.exception("Could not create log directory")
+            QMessageBox.warning(self, "无法打开日志目录", str(error))
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+
+    def _prepare_demucs_model(self) -> None:
+        if self.model_future is not None:
+            return
+        status = self.model_manager.status()
+        if not status.dependencies_available:
+            instruction = (
+                "当前安装包不包含 Demucs/PyTorch。请安装包含音源分离的 Full 版。"
+                if getattr(sys, "frozen", False)
+                else "请先在项目虚拟环境中安装 requirements-separation.txt，"
+                "然后重新启动软件。"
+            )
+            QMessageBox.information(
+                self,
+                "Demucs 依赖未安装",
+                instruction + "基础扒谱功能不受影响。",
+            )
+            return
+        if status.ready:
+            QMessageBox.information(
+                self,
+                "模型已准备",
+                f"{status.spec.name} 已在本机缓存，无需重新下载。",
+            )
+            return
+        choice = QMessageBox.question(
+            self,
+            "下载 Demucs 模型",
+            f"将下载 {status.spec.name}，约 {status.spec.approximate_size_mb} MB。"
+            "模型保存在用户缓存目录，不会加入项目或 Git。是否继续？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if choice != QMessageBox.StandardButton.Yes:
+            return
+        self.prepare_model_action.setEnabled(False)
+        self.status_label.setText("正在后台下载并校验 Demucs 模型…")
+        self.model_future = self.product_executor.submit(self.model_manager.prepare)
+        self.model_timer.start()
+
+    def _poll_model_preparation(self) -> None:
+        future = self.model_future
+        if future is None or not future.done():
+            return
+        self.model_timer.stop()
+        self.model_future = None
+        self.prepare_model_action.setEnabled(True)
+        try:
+            status = future.result()
+        except Exception as error:
+            self.logger.exception("Demucs model preparation failed")
+            self.status_label.setText(f"Demucs 模型准备失败：{error}")
+            QMessageBox.warning(self, "模型准备失败", str(error))
+            return
+        self.demucs_available = DemucsSeparator.is_available()
+        self.separate_guitar_checkbox.setEnabled(self.demucs_available)
+        self.separate_guitar_checkbox.setToolTip(
+            f"模型：{status.spec.name}；{status.summary}；"
+            f"设备：{DemucsSeparator.available_device().upper()}"
+        )
+        self.status_label.setText(f"Demucs 模型已准备：{status.spec.name}")
+        QMessageBox.information(self, "模型已准备", status.summary)
 
     def _connect_playback(self) -> None:
         self.audio_player.position_changed.connect(self._playback_position_changed)
@@ -543,6 +654,7 @@ class MainWindow(QMainWindow):
         try:
             self.audio_player.set_source(path)
         except FileNotFoundError as error:
+            self.logger.warning("Playback source is missing: %s", path)
             self._set_playback_enabled(False)
             self.status_label.setText(str(error))
         else:
@@ -567,6 +679,7 @@ class MainWindow(QMainWindow):
         try:
             audio = load_audio(path)
         except (OSError, ValueError, RuntimeError) as error:
+            self.logger.exception("Audio import failed: %s", path)
             self.status_label.setText(f"音频读取失败：{error}")
             return
 
@@ -595,6 +708,7 @@ class MainWindow(QMainWindow):
         try:
             project = load_project(file_name)
         except ProjectFormatError as error:
+            self.logger.exception("Project open failed: %s", file_name)
             self.status_label.setText(f"项目打开失败：{error}")
             return
 
@@ -624,6 +738,10 @@ class MainWindow(QMainWindow):
                 try:
                     audio = load_audio(project.audio_path)
                 except (OSError, ValueError, RuntimeError) as error:
+                    self.logger.exception(
+                        "Referenced project audio could not be loaded: %s",
+                        project.audio_path,
+                    )
                     audio_text = f"{project.audio_path}（读取失败：{error}）"
                 else:
                     self._set_audio_source(project.audio_path, audio)
@@ -780,8 +898,10 @@ class MainWindow(QMainWindow):
         except (CancelledError, SeparationCancelled):
             self.status_label.setText("分析已取消")
         except SeparationError as error:
+            self.logger.exception("Guitar separation failed")
             self.status_label.setText(f"吉他分离失败：{error}；可取消勾选后分析原音频")
         except Exception as error:  # GUI boundary: report instead of crashing
+            self.logger.exception("Transcription analysis failed")
             self.status_label.setText(f"分析失败：{error}")
         else:
             self._show_transcription_result(result)
@@ -822,6 +942,7 @@ class MainWindow(QMainWindow):
         try:
             guitar_audio = load_audio(result.analyzed_audio_path)
         except (OSError, ValueError, RuntimeError) as error:
+            self.logger.exception("Separated guitar stem could not be loaded")
             self.status_label.setText(
                 self.status_label.text() + f"；吉他 stem 播放加载失败：{error}"
             )
@@ -1258,6 +1379,7 @@ class MainWindow(QMainWindow):
         try:
             self.project_path = save_project(project, target)
         except (OSError, TypeError, ValueError) as error:
+            self.logger.exception("Project save failed: %s", target)
             self.status_label.setText(f"项目保存失败：{error}")
             return False
         if current_tracks:
@@ -1295,6 +1417,7 @@ class MainWindow(QMainWindow):
         try:
             exported = exporter(self.tablature, target)
         except Exception as error:  # GUI boundary: third-party exporters vary
+            self.logger.exception("Export failed: %s", target)
             self.status_label.setText(f"导出失败：{error}")
             return
         track = self.tracks.get(self.active_track_id or "")
@@ -1350,21 +1473,36 @@ class MainWindow(QMainWindow):
             event.ignore()
             return
         self.analysis_timer.stop()
+        self.model_timer.stop()
         self.analysis_cancel_requested = True
         if self.analysis_cancel_event is not None:
             self.analysis_cancel_event.set()
         if self.analysis_future is not None:
             self.analysis_future.cancel()
+        if self.model_future is not None:
+            self.model_future.cancel()
         self.audio_player.stop()
         self.analysis_executor.shutdown(wait=False, cancel_futures=True)
+        self.product_executor.shutdown(wait=False, cancel_futures=True)
         super().closeEvent(event)
 
 
 def main() -> int:
+    try:
+        configure_logging()
+    except OSError:
+        configure_logging(
+            log_dir=Path(tempfile.gettempdir()) / "GuitarBapu-logs"
+        )
+    logger = get_logger("main")
+    install_exception_hooks()
     app = QApplication.instance() or QApplication(sys.argv)
+    logger.info("GUI event loop starting")
     window = MainWindow()
     window.show()
-    return app.exec()
+    exit_code = app.exec()
+    logger.info("GUI event loop stopped with code %s", exit_code)
+    return exit_code
 
 
 if __name__ == "__main__":

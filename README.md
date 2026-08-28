@@ -50,7 +50,7 @@ python -m pytest
 
 ## 当前开发阶段
 
-Phase 9C（演奏技巧识别）已完成基础版。转录服务会在音高检测后分析连续音高轮廓、振幅二次起音和周期性音高调制，为单音段生成滑弦、击弦、勾弦、推弦或颤音候选。自动标签会显示独立的技巧可信度，并可在 GUI 中试听、修改或删除。
+Phase 9D（产品化基础）已完成基础版。除 Phase 9A–9C 的分析和编辑能力外，软件现在提供跨平台启动脚本、系统诊断、滚动日志、崩溃报告、可选 Demucs 模型状态检查/显式下载入口，以及 PyInstaller 打包配置。
 
 ### 音高检测示例
 
@@ -267,11 +267,39 @@ for detection in result.analysis.techniques:
 - 同一个音符暂时不能同时保存例如“推弦 + 颤音”两个自动标签；
 - 这是可解释的确定性基线，不是训练完成的高精度吉他技巧 AI 模型。
 
+### Phase 9D 产品化基础
+
+帮助菜单现在提供：
+
+- **系统诊断**：检查 Python、核心依赖、可选 Demucs 依赖、模型缓存和用户目录；报告可复制或保存，不包含环境变量、音频或项目内容；
+- **准备 Demucs 模型**：只有用户明确确认后才下载 `htdemucs_6s` 所需权重，并在后台校验缓存；基础版不安装 Demucs 时仍可正常使用；
+- **打开日志目录**：日志默认按平台写入用户日志目录，单个文件滚动保留，便于定位导入、分析、导出和模型错误。
+
+未捕获的主线程或后台线程异常会生成带时间戳的文本崩溃报告。日志、模型和分离缓存都位于用户目录，不会写入仓库。
+
+源码运行方式：
+
+```bash
+./run_app.sh                 # macOS / Linux
+./run_app.command             # macOS Finder 双击
+run_app.bat                  # Windows
+```
+
+本地打包需要先安装开发依赖：
+
+```bash
+python -m pip install -r requirements-dev.txt
+python scripts/build_app.py                 # 基础包，不含 PyTorch/Demucs
+python scripts/build_app.py --with-separation  # 含可选分离，体积明显更大
+```
+
+产物位于 `dist/GuitarBapu/`。打包必须在目标操作系统上执行；当前配置是可复现的起点，不等同于已经签名、公证或发布到应用商店的安装包。Full 版会把 PyTorch 和 Demucs 一并打包，但模型权重仍建议由用户在应用内显式下载，以避免把大文件提交到 Git。
+
 ## 后续规划
 
 1. 用有技巧标注的自有或授权 DI 吉他素材评估 Phase 9C 的精确率、召回率和时间边界。
-2. 根据评测结果调整阈值，并决定是否引入专用技巧识别模型。
-3. Phase 9D：安装包、模型下载 UI、日志诊断和跨平台产品化。
+2. 在 macOS、Windows、Linux 各生成并实测基础包和 Full 包，补充签名、公证、安装器和自动更新。
+3. 根据评测结果调整技巧阈值，并决定是否引入专用轻量技巧模型。
 
 ## 运行项目
 
@@ -283,7 +311,7 @@ python -m src.gui.app
 
 macOS 也可以在 Finder 中双击 `run_app.command`。GUI 会在后台分析，不会阻塞窗口，并显示波形、播放游标、四小节换行的六线谱以及可编辑事件表。分析完成后可选择事件定位音频、循环练习、修改音高/指法/时值/技巧、撤销重做、保存项目，或导出 TAB、MIDI 和 MusicXML。
 
-`run_app.command` 会优先使用项目中的 `.venv/bin/python`，因此可选 Demucs 依赖安装到 `.venv` 后，双击启动也能正确识别。
+`run_app.command` 和 `run_app.sh` 会优先使用项目中的 `.venv/bin/python`，`run_app.bat` 会优先使用 `.venv\\Scripts\\python.exe`。因此可选 Demucs 依赖安装到对应虚拟环境后，启动脚本能正确识别。
 
 当前单音模式适合清晰的吉他 Solo、音阶和技巧测试录音；实验性复音模式适合干净、稳定的和弦。技巧识别属于需要试听确认的实验功能，真实混音的高精度复音/技巧识别和图形化编辑仍属于后续能力。
 

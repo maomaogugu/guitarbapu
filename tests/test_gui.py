@@ -24,6 +24,7 @@ from src.audio.separator import (
 from src.audio.transcription_service import TranscriptionResult
 from src.audio.track_classifier import TrackClassifier
 from src.gui.app import MainWindow
+from src.gui.diagnostics_dialog import DiagnosticsDialog
 from src.music.chord import Chord
 from src.music.note import Note
 from src.music.tab_generator import TabGenerator
@@ -31,6 +32,8 @@ from src.music.technique import GuitarTechnique, TechniqueDetection
 from src.music.timing import QuantizedNote, Rest, TimingInfo
 from src.music.track import TrackRole
 from src.project import TranscriptionTrack, load_project
+from src.utils.diagnostics import collect_diagnostics
+from src.utils.model_manager import HTDEMUCS_6S, ModelStatus
 
 
 def _sample_analysis():
@@ -171,6 +174,88 @@ def test_result_actions_enable_only_after_analysis():
     assert window.event_table.rowCount() == 1
     assert window.insert_event_button.isEnabled()
 
+    window.close()
+    app.processEvents()
+
+
+def test_help_menu_exposes_product_support_actions():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    assert window.diagnostics_action.text() == "系统诊断…"
+    assert window.prepare_model_action.text() == "准备 Demucs 模型…"
+    assert window.open_logs_action.text() == "打开日志目录"
+
+    window.close()
+    app.processEvents()
+
+
+def test_diagnostics_dialog_can_save_report(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+
+    class Manager:
+        def status(self):
+            return ModelStatus(
+                HTDEMUCS_6S,
+                True,
+                True,
+                HTDEMUCS_6S.required_files,
+            )
+
+    diagnostics = collect_diagnostics(
+        model_manager=Manager(),
+        paths=(tmp_path,),
+    )
+    target = tmp_path / "diagnostics.txt"
+    dialog = DiagnosticsDialog(diagnostics, log_dir=tmp_path / "logs")
+    monkeypatch.setattr(
+        QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(target), ""),
+    )
+
+    dialog._save_report()
+
+    assert target.exists()
+    assert "系统诊断" in target.read_text(encoding="utf-8")
+    dialog.close()
+    app.processEvents()
+
+
+def test_gui_prepares_optional_model_in_background(monkeypatch):
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    missing = ModelStatus(HTDEMUCS_6S, True, False)
+    ready = ModelStatus(
+        HTDEMUCS_6S,
+        True,
+        True,
+        HTDEMUCS_6S.required_files,
+    )
+
+    class Manager:
+        def status(self):
+            return missing
+
+        def prepare(self):
+            return ready
+
+    window.model_manager = Manager()
+    monkeypatch.setattr(
+        QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: None)
+
+    window._prepare_demucs_model()
+    assert window.model_future is not None
+    window.model_future.result(timeout=2)
+    window._poll_model_preparation()
+
+    assert window.model_future is None
+    assert window.prepare_model_action.isEnabled()
+    assert "已准备" in window.status_label.text()
     window.close()
     app.processEvents()
 

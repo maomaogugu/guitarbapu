@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Development, automated testing, and local application packaging.
+pytest>=8,<9
+pyinstaller>=6.10,<7
