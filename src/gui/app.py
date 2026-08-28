@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QTimer, Qt
+from PyQt6.QtGui import QFontDatabase
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -26,6 +27,9 @@ from PyQt6.QtWidgets import (
 
 from src.audio.analyzer import AudioAnalysis, AudioAnalyzer
 from src.audio.loader import AudioData, load_audio
+from src.music.tab import Tablature
+from src.music.tab_generator import TabGenerator
+from src.music.tab_renderer import TextTabRenderer
 
 
 class MainWindow(QMainWindow):
@@ -37,6 +41,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.selected_file: Path | None = None
         self.audio: AudioData | None = None
+        self.tablature: Tablature | None = None
         self.analysis_executor = ThreadPoolExecutor(max_workers=1)
         self.analysis_future: Future | None = None
         self.analysis_timer = QTimer(self)
@@ -87,11 +92,15 @@ class MainWindow(QMainWindow):
         status_layout.addWidget(self.status_label)
         layout.addWidget(status_group)
 
-        tab_group = QGroupBox("检测到的音符（基础版）")
+        tab_group = QGroupBox("六线谱 TAB 与音符详情")
         tab_layout = QVBoxLayout(tab_group)
         self.tab_output = QPlainTextEdit()
         self.tab_output.setReadOnly(True)
-        self.tab_output.setPlaceholderText("分析完成后，识别到的音符将在这里显示")
+        self.tab_output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self.tab_output.setFont(
+            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        )
+        self.tab_output.setPlaceholderText("分析完成后，六线谱将在这里显示")
         tab_layout.addWidget(self.tab_output)
         layout.addWidget(tab_group, stretch=1)
 
@@ -121,6 +130,7 @@ class MainWindow(QMainWindow):
             return
 
         self.audio = audio
+        self.tablature = None
         self.file_label.setText(
             f"文件名：{self.selected_file.name}\n"
             f"时长：{audio.duration:.2f} 秒\n"
@@ -180,10 +190,19 @@ class MainWindow(QMainWindow):
             self.tab_output.setPlainText("未检测到音符。请尝试单音、较清晰的吉他录音。")
             return
 
+        try:
+            tablature = TabGenerator().generate(analysis)
+            rendered_tab = TextTabRenderer().render(tablature)
+        except (RuntimeError, ValueError) as error:
+            self._show_analysis_error(f"TAB 生成失败：{error}")
+            return
+        self.tablature = tablature
+
         rhythm = analysis.rhythm
         tempo = rhythm.timing.tempo_bpm if rhythm is not None else None
         tempo_text = f"{tempo:.1f} BPM" if tempo is not None else "未检测到稳定 BPM"
-        lines = [
+        detail_lines = [
+            "音符详情",
             f"原始音符：{len(analysis.raw_notes)}  清理后：{len(notes)}",
             f"节拍：{tempo_text}",
             "",
@@ -202,21 +221,24 @@ class MainWindow(QMainWindow):
                     if item.source.confidence is not None
                     else ""
                 )
-                lines.append(
+                detail_lines.append(
                     f"{note.name:<4} MIDI={note.midi:<3} "
                     f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
                     f"{beat_text}{confidence}"
                 )
         else:
-            lines.extend(
+            detail_lines.extend(
                 f"{note.name:<4} MIDI={note.midi:<3} "
                 f"开始={note.start:.2f}s 时长={note.duration:.2f}s"
                 for note in notes
             )
-        self.tab_output.setPlainText("\n".join(lines))
+        self.tab_output.setPlainText(
+            rendered_tab + "\n\n" + "\n".join(detail_lines)
+        )
         self.status_label.setText(
             f"分析完成：{len(analysis.raw_notes)} 个原始事件清理为 "
-            f"{len(notes)} 个音符，识别到 {len(rhythm.rests) if rhythm else 0} 个休止段"
+            f"{len(notes)} 个音符；TAB 映射 {len(tablature.events)} 个，"
+            f"未映射 {len(tablature.unmapped_notes)} 个"
         )
 
     def closeEvent(self, event) -> None:

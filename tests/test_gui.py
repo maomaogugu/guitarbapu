@@ -42,6 +42,8 @@ def test_main_window_displays_cleaned_notes_and_tempo():
     assert "120.0 BPM" in text
     assert "E4" in text
     assert "时值=1.00拍" in text
+    assert "Tuning: E A D G B E" in text
+    assert "Mapped: 1" in text
     assert "清理为 1 个音符" in window.status_label.text()
     window.close()
     app.processEvents()

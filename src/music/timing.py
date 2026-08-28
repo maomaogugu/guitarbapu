@@ -81,7 +81,8 @@ def quantize_notes(
         duration_beats = max(step, end_beat - start_beat)
         tie_to_next = False
         if timing.time_signature is not None:
-            beats_per_measure = float(timing.time_signature[0])
+            numerator, denominator = timing.time_signature
+            beats_per_measure = numerator * 4.0 / denominator
             start_measure = int(start_beat // beats_per_measure)
             end_measure = int(
                 (start_beat + duration_beats - 1e-9) // beats_per_measure

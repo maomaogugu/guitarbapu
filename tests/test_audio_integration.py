@@ -5,6 +5,8 @@ import soundfile as sf
 
 from src.audio.analyzer import AudioAnalyzer
 from src.audio.loader import load_audio
+from src.music.tab_generator import TabGenerator
+from src.music.tab_renderer import TextTabRenderer
 
 
 def _tone(frequency: float, seconds: float, sample_rate: int) -> np.ndarray:
@@ -34,3 +36,9 @@ def test_real_wav_pipeline_detects_two_known_notes(tmp_path):
     assert 64 in detected  # E4
     assert all(note.duration >= 0.08 for note in result.notes)
     assert result.rhythm is not None
+
+    tablature = TabGenerator().generate(result)
+    rendered = TextTabRenderer().render(tablature)
+    assert len(tablature.events) >= 2
+    assert "A4" not in rendered  # Text TAB represents notes as fret positions.
+    assert "Mapped:" in rendered

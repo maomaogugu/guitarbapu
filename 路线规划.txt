@@ -124,8 +124,19 @@ Phase 4：Timing 与 Note 清理（已完成）
 测试：合成节拍音频、已知 BPM 的短旋律、边界帧、静音段和量化误差。
 阶段提交示例：feat: normalize detected note timing。
 
-Phase 5：TAB Generator
+Phase 5：TAB Generator（已完成）
 目标：将音符和指法位置转换为结构化、可编辑的六线谱。
+
+本阶段已完成：
+- 扩展 TabEvent/Tablature，保存 Note、琴弦、品位、秒级时间、拍位置、时值、小节、延音、置信度和技巧字段。
+- 新增 FingeringOptimizer，以动态规划全局优化低品位、换把、跨弦和大跨度成本。
+- 支持同一拍多个结构化音符分配到不同琴弦；当前分析器仍保持单音能力。
+- 新增 TabGenerator，处理默认 4/4、小节、休止符、跨小节延音和无法映射音符。
+- 新增 TextTabRenderer，支持一位/两位品位对齐、每行四小节、长 TAB 换行和 `x` 警告。
+- GUI 已显示真正的六线谱，并在下方保留音符详情。
+- 真实六弦调音 WAV 生成 30 个 TAB 事件、0 个未映射；六根弦各有 5 次正确空弦。
+
+当前限制：文本 TAB 尚不可直接编辑或导出文件；技巧字段已预留但还未自动识别；复音和弦识别仍属于后续模型能力。
 
 实现顺序：
 1. 扩展 TabEvent/Tablature，保存音符关联、弦、品、时间和技巧。
@@ -201,11 +212,11 @@ Phase 9：高级识别与产品化
 
 六、推荐的下一步
 ----------------
-当前最合理的下一阶段是 Phase 5：TAB Generator。推荐顺序：
+当前最合理的下一阶段是 Phase 6：导出与持久化。推荐顺序：
 
-1. 扩展 TabEvent，使其关联 Note、FretPosition 和量化节拍。
-2. 将 AudioAnalysis.notes 交给 Fretboard.map_notes，生成稳定位置序列。
-3. 处理 rests、同一时间事件、小节线和无法映射的音符。
-4. 先实现可测试的文本 TAB 渲染器，再接入 GUI。
+1. 定义版本化 JSON 项目文件，保存音频引用、分析参数、Note、TimingInfo 和 Tablature。
+2. 增加文本 TAB 导出，确保与 GUI 显示一致。
+3. 使用 music21 增加 MIDI 和 MusicXML 导出。
+4. 再评估 PDF 与 Guitar Pro 路径，不直接绑定不稳定格式库。
 
 当前不要做：一次性重写 loader、提前接入 Demucs、直接实现复杂复音模型、为了导出格式破坏 Note/Timing/Tab 数据契约。

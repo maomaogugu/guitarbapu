@@ -2,7 +2,7 @@
 
 GuitarBapu 是一款面向吉他手的 AI 吉他扒谱软件，目标是将音频中的吉他演奏转换为可编辑、可导出的音符和六线谱，帮助用户更快学习和整理歌曲。
 
-当前版本已经具备可用的基础单音工作流：导入音频、检测音高、清理误检、估计节拍、量化时值并显示结果。复音歌曲、完整 TAB 和导出仍在后续阶段。
+当前版本已经具备可用的基础单音扒谱工作流：导入音频、检测音高、清理误检、估计节拍、量化时值、选择琴弦/品位并生成文本六线谱。复音歌曲、可视化编辑和文件导出仍在后续阶段。
 
 ## 项目结构
 
@@ -38,7 +38,7 @@ python -m pytest
 
 ## 当前开发阶段
 
-Phase 4（Timing 与 Note 清理）已经完成。Audio Loader 可读取 MP3、WAV 和 FLAC；分析器会执行基础单音音高检测、短音过滤、同音合并、音高去抖、onset 分割、BPM 估计、1/16 拍网格量化和休止段提取。`Fretboard` 可继续把结果映射到标准吉他的琴弦/品位。
+Phase 5（TAB Generator）已经完成。Audio Loader 可读取 MP3、WAV 和 FLAC；分析器会执行基础单音音高检测、短音过滤、同音合并、音高去抖、onset 分割、BPM 估计和 1/16 拍网格量化，随后通过全局指法优化生成可演奏的文本六线谱。
 
 ### 音高检测示例
 
@@ -81,12 +81,28 @@ chosen = fretboard.choose_position(note)    # 基础低品位策略
 
 标准吉他默认是 E-A-D-G-B-E、24 品；`Guitar.standard(capo=2)` 可表示使用变调夹的情况。不可演奏的 MIDI 音符会返回空位置列表，连续音符可通过 `map_notes()` 选择较平滑的指法。当前策略是启发式规则，尚未处理手指编号、和弦按法或复杂技巧。
 
+### TAB 生成示例
+
+```python
+from src.audio.analyzer import AudioAnalyzer
+from src.audio.loader import load_audio
+from src.music.tab_generator import TabGenerator
+from src.music.tab_renderer import TextTabRenderer
+
+analysis = AudioAnalyzer().analyze(load_audio("guitar.wav"))
+tablature = TabGenerator().generate(analysis)
+print(TextTabRenderer().render(tablature))
+```
+
+TAB 默认采用 4/4、每拍四等分、每行四小节。指法选择使用动态规划，综合考虑低品位、换把距离、跨弦距离和和弦品位跨度。无法映射的音符会在六条弦上显示 `x`，并在结果末尾给出警告，不会被静默丢弃。
+
+同一拍的多个 `Note` 可以作为结构化和弦分配到不同琴弦，但当前音高分析器仍是单音算法；这项结构能力是为后续复音识别预留的。
+
 ## 后续规划
 
-1. Phase 5：把清理和量化后的音符、休止符、琴弦/品位转换为结构化 TAB。
-2. Phase 6：增加项目文件、MIDI、MusicXML、文本 TAB 和 PDF 导出。
-3. Phase 7：完善波形、播放定位、编辑和导出 GUI。
-4. Phase 8/9：音源分离、复音识别、技巧识别和产品化。
+1. Phase 6：增加项目文件、MIDI、MusicXML、文本 TAB 和 PDF 导出。
+2. Phase 7：完善波形、播放定位、编辑和导出 GUI。
+3. Phase 8/9：音源分离、复音识别、技巧识别和产品化。
 
 ## 运行项目
 
@@ -96,9 +112,9 @@ chosen = fretboard.choose_position(note)    # 基础低品位策略
 python -m src.gui.app
 ```
 
-macOS 也可以在 Finder 中双击 `run_app.command`。GUI 会在后台分析，不会阻塞窗口，并显示原始/清理后音符数量、BPM、量化时间和置信度。
+macOS 也可以在 Finder 中双击 `run_app.command`。GUI 会在后台分析，不会阻塞窗口，并显示四小节换行的六线谱、映射统计、原始/清理后音符、BPM、量化时间和置信度。
 
-当前结果是稳定的单音 `Note` 列表而非完整 TAB。它适合清晰的吉他单音、音阶和调音录音；完整歌曲、和弦或多个同时发声的音符不属于当前算法能力。
+当前结果适合清晰的吉他单音、音阶和调音录音。完整歌曲、和弦识别、推弦/滑弦等技巧以及图形化编辑不属于当前算法能力。
 
 运行自动化检查：
 
