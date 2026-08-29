@@ -54,6 +54,7 @@ class PolyphonicAudioAnalyzer:
         log_compress: bool = False,
         baseline_percentile: float = 50.0,
         novelty_weight: float = 0.0,
+        bin_normalize: bool = False,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -100,6 +101,7 @@ class PolyphonicAudioAnalyzer:
         self.log_compress = bool(log_compress)
         self.baseline_percentile = float(baseline_percentile)
         self.novelty_weight = float(novelty_weight)
+        self.bin_normalize = bool(bin_normalize)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -163,8 +165,15 @@ class PolyphonicAudioAnalyzer:
             raise RuntimeError("librosa could not compute a polyphonic CQT") from exc
 
         frame_count = min(strengths.shape[1], rms.size, frame_times.size)
+        strengths = strengths[:, :frame_count]
+        if self.bin_normalize and frame_count:
+            # Constant-Q filters integrate over ~1/f windows, which hugely
+            # inflates low-register magnitudes.  Rescale every midi bin by its
+            # own typical level so bass cannot drown out quiet melody notes.
+            floor = np.percentile(strengths, 60.0, axis=1, keepdims=True)
+            strengths = strengths / np.maximum(floor, 1e-6)
         return (
-            strengths[:, :frame_count],
+            strengths,
             rms[:frame_count],
             frame_times[:frame_count],
         )

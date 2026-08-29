@@ -87,6 +87,13 @@ def test_novelty_weight_is_validated():
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
 
 
+def test_bin_normalize_keeps_chord_detection():
+    analysis = PolyphonicAudioAnalyzer(bin_normalize=True).analyze(
+        _audio((48, 52, 55))
+    )
+    assert {48, 52, 55} <= {note.midi for note in analysis.notes}
+
+
 def test_baseline_percentile_is_validated():
     with pytest.raises(ValueError, match="baseline_percentile"):
         PolyphonicAudioAnalyzer(baseline_percentile=101)
