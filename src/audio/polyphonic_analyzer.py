@@ -54,7 +54,6 @@ class PolyphonicAudioAnalyzer:
         log_compress: bool = False,
         baseline_percentile: float = 50.0,
         novelty_weight: float = 0.0,
-        local_max_radius: int = 0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -84,8 +83,6 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("baseline_percentile must be between 0 and 100")
         if not 0 <= novelty_weight <= 1:
             raise ValueError("novelty_weight must be between 0 and 1")
-        if not 0 <= local_max_radius <= 3:
-            raise ValueError("local_max_radius must be between 0 and 3")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -103,7 +100,6 @@ class PolyphonicAudioAnalyzer:
         self.log_compress = bool(log_compress)
         self.baseline_percentile = float(baseline_percentile)
         self.novelty_weight = float(novelty_weight)
-        self.local_max_radius = int(local_max_radius)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -253,20 +249,6 @@ class PolyphonicAudioAnalyzer:
             right = scores[index + 1] if index + 1 < scores.size else -1.0
             if score >= left and score >= right:
                 candidates.append(index)
-
-        if self.local_max_radius > 0 and len(candidates) > 1:
-            # Greedy non-maximum suppression across pitch: transients and CQT
-            # sidelobes create semitone junk (e.g. 41/44 next to a real 43);
-            # keep only the strongest peak within each radius window.
-            kept: list[int] = []
-            for index in sorted(
-                candidates, key=lambda i: (-float(scores[i]), i)
-            ):
-                if all(
-                    abs(index - other) > self.local_max_radius for other in kept
-                ):
-                    kept.append(index)
-            candidates = sorted(kept)
 
         accepted: list[int] = []
         for index in candidates:
