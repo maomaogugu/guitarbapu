@@ -47,6 +47,7 @@ class PolyphonicAudioAnalyzer:
         max_polyphony: int = 6,
         min_segment_duration: float = 0.10,
         beat_subdivision: int = 4,
+        attack_weight: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -62,6 +63,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("max_polyphony must be between 1 and 6")
         if min_segment_duration <= 0:
             raise ValueError("min_segment_duration must be positive")
+        if not 0 <= attack_weight <= 1:
+            raise ValueError("attack_weight must be between 0 and 1")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -72,6 +75,7 @@ class PolyphonicAudioAnalyzer:
         self.harmonic_ratio = float(harmonic_ratio)
         self.max_polyphony = int(max_polyphony)
         self.min_segment_duration = float(min_segment_duration)
+        self.attack_weight = float(attack_weight)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -168,6 +172,15 @@ class PolyphonicAudioAnalyzer:
         if not np.any(voiced):
             return ((), ())
         scores = np.median(strengths[:, voiced], axis=1)
+        if self.attack_weight > 0:
+            attack_window = min(0.12, max(0.03, (end - start) * 0.35))
+            attack_mask = voiced & (frame_times < start + attack_window)
+            if np.any(attack_mask):
+                attack_scores = np.max(strengths[:, attack_mask], axis=1)
+                scores = (
+                    (1.0 - self.attack_weight) * scores
+                    + self.attack_weight * attack_scores
+                )
         scores = np.maximum(scores - float(np.median(scores)), 0.0)
         maximum = float(np.max(scores)) if scores.size else 0.0
         if not math.isfinite(maximum) or maximum <= 0:

@@ -51,15 +51,17 @@ def evaluate_case(case: dict, grid: dict[str, list[float]]) -> dict:
     )
     audio = load_audio(audio_path)
     results: list[dict] = []
-    for relative, harmonic, energy in itertools.product(
+    for relative, harmonic, energy, attack_weight in itertools.product(
         grid["relative_pitch_threshold"],
         grid["harmonic_ratio"],
         grid["energy_threshold"],
+        grid["attack_weight"],
     ):
         analyzer = PolyphonicAudioAnalyzer(
             relative_pitch_threshold=relative,
             harmonic_ratio=harmonic,
             energy_threshold=energy,
+            attack_weight=attack_weight,
         )
         analysis = analyzer.analyze(audio)
         detected = _top_voice_midis(analysis)
@@ -70,6 +72,7 @@ def evaluate_case(case: dict, grid: dict[str, list[float]]) -> dict:
                 "harmonic_ratio": harmonic,
                 "energy_threshold": energy,
                 "best_window_ratio": _best_window_ratio(reference, detected),
+                "attack_weight": attack_weight,
                 "notes": len(analysis.notes),
                 "chords": len(analysis.chords),
                 "high_voice_notes_e_string_range": high_voice,
@@ -94,6 +97,7 @@ def main() -> int:
         "relative_pitch_threshold": [0.12, 0.16, 0.20, 0.24],
         "harmonic_ratio": [0.45, 0.58, 0.70],
         "energy_threshold": [0.05, 0.08],
+        "attack_weight": [0.0, 0.2, 0.35],
     }
     report = {
         "grid": grid,
