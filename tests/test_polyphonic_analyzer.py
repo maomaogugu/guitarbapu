@@ -87,6 +87,15 @@ def test_novelty_weight_is_validated():
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
 
 
+def test_re_onset_gate_is_validated_and_keeps_new_attacks():
+    with pytest.raises(ValueError, match="re_onset_gate"):
+        PolyphonicAudioAnalyzer(re_onset_gate=2.1)
+    analysis = PolyphonicAudioAnalyzer(re_onset_gate=0.5).analyze(
+        _audio((48, 52, 55))
+    )
+    assert {48, 52, 55} <= {note.midi for note in analysis.notes}
+
+
 def test_baseline_percentile_is_validated():
     with pytest.raises(ValueError, match="baseline_percentile"):
         PolyphonicAudioAnalyzer(baseline_percentile=101)

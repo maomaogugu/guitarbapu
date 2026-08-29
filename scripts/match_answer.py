@@ -257,6 +257,7 @@ def main() -> int:
     )
     parser.add_argument("--baseline-percentile", type=float, default=50.0)
     parser.add_argument("--novelty-weight", type=float, default=0.0)
+    parser.add_argument("--re-onset-gate", type=float, default=0.0)
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -274,6 +275,7 @@ def main() -> int:
         log_compress=args.log_compress,
         baseline_percentile=args.baseline_percentile,
         novelty_weight=args.novelty_weight,
+        re_onset_gate=args.re_onset_gate,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output is None:

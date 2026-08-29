@@ -54,6 +54,7 @@ class PolyphonicAudioAnalyzer:
         log_compress: bool = False,
         baseline_percentile: float = 50.0,
         novelty_weight: float = 0.0,
+        re_onset_gate: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -83,6 +84,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("baseline_percentile must be between 0 and 100")
         if not 0 <= novelty_weight <= 1:
             raise ValueError("novelty_weight must be between 0 and 1")
+        if not 0 <= re_onset_gate <= 2:
+            raise ValueError("re_onset_gate must be in [0, 2]")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -100,6 +103,7 @@ class PolyphonicAudioAnalyzer:
         self.log_compress = bool(log_compress)
         self.baseline_percentile = float(baseline_percentile)
         self.novelty_weight = float(novelty_weight)
+        self.re_onset_gate = float(re_onset_gate)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -267,6 +271,22 @@ class PolyphonicAudioAnalyzer:
                     break
             if not harmonic:
                 accepted.append(index)
+
+        if self.re_onset_gate > 0 and accepted:
+            # Only keep pitches whose raw energy actually rose at this onset.
+            # Sustained notes re-detected at every subsequent onset would
+            # otherwise crowd the polyphony budget and starve fresh attacks.
+            prev_mask = (frame_times >= start - 0.3) & (frame_times < start)
+            if np.any(prev_mask):
+                prev_peak = np.max(strengths[:, prev_mask], axis=1)
+            else:
+                prev_peak = np.zeros(strengths.shape[0], dtype=np.float32)
+            cur_peak = np.max(strengths[:, voiced], axis=1)
+            accepted = [
+                index
+                for index in accepted
+                if cur_peak[index] >= prev_peak[index] * (1.0 + self.re_onset_gate)
+            ]
 
         accepted = sorted(
             accepted,
