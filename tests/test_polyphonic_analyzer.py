@@ -96,6 +96,15 @@ def test_freq_weight_keeps_chord_detection():
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
 
 
+def test_stft_frontend_detects_c_major_chord():
+    with pytest.raises(ValueError, match="frontend"):
+        PolyphonicAudioAnalyzer(frontend="wavelet")
+    analysis = PolyphonicAudioAnalyzer(frontend="stft").analyze(
+        _audio((48, 52, 55))
+    )
+    assert {48, 52, 55} <= {note.midi for note in analysis.notes}
+
+
 def test_baseline_percentile_is_validated():
     with pytest.raises(ValueError, match="baseline_percentile"):
         PolyphonicAudioAnalyzer(baseline_percentile=101)

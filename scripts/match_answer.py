@@ -258,6 +258,7 @@ def main() -> int:
     parser.add_argument("--baseline-percentile", type=float, default=50.0)
     parser.add_argument("--novelty-weight", type=float, default=0.0)
     parser.add_argument("--freq-weight", type=float, default=0.0)
+    parser.add_argument("--frontend", choices=("cqt", "stft"), default="cqt")
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -276,6 +277,7 @@ def main() -> int:
         baseline_percentile=args.baseline_percentile,
         novelty_weight=args.novelty_weight,
         freq_weight=args.freq_weight,
+        frontend=args.frontend,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output is None:

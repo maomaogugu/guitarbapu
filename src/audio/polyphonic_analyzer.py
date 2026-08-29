@@ -55,6 +55,7 @@ class PolyphonicAudioAnalyzer:
         baseline_percentile: float = 50.0,
         novelty_weight: float = 0.0,
         freq_weight: float = 0.0,
+        frontend: str = "cqt",
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -86,6 +87,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("novelty_weight must be between 0 and 1")
         if not 0 <= freq_weight <= 2:
             raise ValueError("freq_weight must be between 0 and 2")
+        if frontend not in ("cqt", "stft"):
+            raise ValueError("frontend must be 'cqt' or 'stft'")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -104,6 +107,7 @@ class PolyphonicAudioAnalyzer:
         self.baseline_percentile = float(baseline_percentile)
         self.novelty_weight = float(novelty_weight)
         self.freq_weight = float(freq_weight)
+        self.frontend = str(frontend)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -132,20 +136,43 @@ class PolyphonicAudioAnalyzer:
             )
         try:
             librosa = import_librosa()
-            cqt = librosa.cqt(
-                waveform,
-                sr=sample_rate,
-                hop_length=self.hop_length,
-                fmin=float(librosa.midi_to_hz(self.min_midi)),
-                n_bins=midi_count * self.bins_per_semitone,
-                bins_per_octave=12 * self.bins_per_semitone,
-            )
-            magnitude = np.abs(cqt).astype(np.float32)
-            strengths = magnitude.reshape(
-                midi_count,
-                self.bins_per_semitone,
-                magnitude.shape[1],
-            ).max(axis=1)
+            if self.frontend == "stft":
+                # Linear-frequency STFT mapped into midi bins: keeps equal
+                # per-peak scaling across registers, unlike constant-Q whose
+                # long low-frequency windows inflate bass magnitudes.
+                n_fft = 8192
+                spec = np.abs(
+                    librosa.stft(
+                        waveform, n_fft=n_fft, hop_length=self.hop_length
+                    )
+                ).astype(np.float32)
+                fft_freqs = librosa.fft_frequencies(sr=sample_rate, n_fft=n_fft)
+                fft_midis = librosa.hz_to_midi(np.maximum(fft_freqs, 1e-9))
+                midi_ids = np.arange(self.min_midi, self.max_midi + 1)
+                rows = []
+                for midi in midi_ids:
+                    band = np.abs(fft_midis - midi) < 0.5
+                    if np.any(band):
+                        rows.append(spec[band].max(axis=0))
+                    else:
+                        rows.append(np.zeros(spec.shape[1], dtype=np.float32))
+                magnitude = np.stack(rows, axis=0)
+                strengths = magnitude
+            else:
+                cqt = librosa.cqt(
+                    waveform,
+                    sr=sample_rate,
+                    hop_length=self.hop_length,
+                    fmin=float(librosa.midi_to_hz(self.min_midi)),
+                    n_bins=midi_count * self.bins_per_semitone,
+                    bins_per_octave=12 * self.bins_per_semitone,
+                )
+                magnitude = np.abs(cqt).astype(np.float32)
+                strengths = magnitude.reshape(
+                    midi_count,
+                    self.bins_per_semitone,
+                    magnitude.shape[1],
+                ).max(axis=1)
             rms = np.asarray(
                 librosa.feature.rms(
                     y=waveform,
