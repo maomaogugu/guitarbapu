@@ -854,7 +854,10 @@ class MainWindow(QMainWindow):
             )
         if analysis_mode == "polyphonic":
             gentle_boost = self.fingerstyle_boost_checkbox.isChecked()
-            analyzer = PolyphonicAudioAnalyzer(log_compress=gentle_boost)
+            analyzer = PolyphonicAudioAnalyzer(
+                log_compress=gentle_boost,
+                attack_weight=0.35 if gentle_boost else 0.0,
+            )
             self.analysis_parameters = {
                 "analysis_mode": analysis_mode,
                 "min_midi": analyzer.min_midi,
