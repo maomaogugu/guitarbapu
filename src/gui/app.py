@@ -486,7 +486,14 @@ class MainWindow(QMainWindow):
             self.track_combo.addItem(self._track_label(track), track.track_id)
         track_id = selected_track_id
         if track_id not in self.tracks:
-            track_id = tracks[0].track_id if tracks else None
+            # Fingerstyle songs are usually evaluated on the fullest texture;
+            # default to the track with the most events instead of blindly
+            # choosing the first (lead) candidate.
+            track_id = (
+                max(tracks, key=lambda item: len(item.tablature.events)).track_id
+                if tracks
+                else None
+            )
         if track_id is not None:
             self.track_combo.setCurrentIndex(self.track_combo.findData(track_id))
         self.track_combo.blockSignals(False)
@@ -523,7 +530,7 @@ class MainWindow(QMainWindow):
         )
         self.track_info_label.setText(
             f"{track.role.display_name}，来源：{source_text}{confidence}；"
-            "这是共享同一音频的逻辑事件轨，不是独立音频 stem"
+            "逻辑轨共享同一音频，导出只针对当前轨；完整指弹织体通常在事件最多的节奏轨"
         )
         self._apply_tablature(controller.tablature)
         master_text = ""

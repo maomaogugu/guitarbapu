@@ -603,11 +603,13 @@ def test_gui_switches_logical_tracks_and_preserves_independent_edits():
     window = MainWindow()
     window._show_transcription_result(_mixed_result())
 
+    # Default view is the fullest texture (rhythm); switch to lead explicitly.
     assert window.track_combo.count() == 2
-    assert window.active_track_id == "logical-lead"
-    assert window.event_table.rowCount() == 1
-    assert "不是独立音频 stem" in window.track_info_label.text()
+    assert window.active_track_id == "logical-rhythm"
+    assert window.event_table.rowCount() == 3
+    assert "逻辑轨共享同一音频" in window.track_info_label.text()
 
+    window.track_combo.setCurrentIndex(window.track_combo.findData("logical-lead"))
     assert window.edit_controller is not None
     changed_index = window.edit_controller.change_pitch(0, 71)
     window._edited(changed_index, "修改主音")
@@ -635,6 +637,7 @@ def test_gui_saves_track_roles_and_independent_tablatures(monkeypatch, tmp_path)
     window = MainWindow()
     window.selected_file = tmp_path / "missing.wav"
     window._show_transcription_result(_mixed_result())
+    window.track_combo.setCurrentIndex(window.track_combo.findData("logical-lead"))
     assert window.edit_controller is not None
     changed_index = window.edit_controller.change_pitch(0, 71)
     window._edited(changed_index, "修改")
