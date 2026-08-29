@@ -87,6 +87,19 @@ def test_novelty_weight_is_validated():
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
 
 
+def test_local_max_radius_suppresses_semitone_sidelobes():
+    with pytest.raises(ValueError, match="local_max_radius"):
+        PolyphonicAudioAnalyzer(local_max_radius=4)
+
+    audio = _audio((50, 51))
+    default = PolyphonicAudioAnalyzer().analyze(audio)
+    assert {50, 51} <= {note.midi for note in default.notes}
+
+    guarded = PolyphonicAudioAnalyzer(local_max_radius=1).analyze(audio)
+    midis = {note.midi for note in guarded.notes}
+    assert len({50, 51} & midis) == 1
+
+
 def test_baseline_percentile_is_validated():
     with pytest.raises(ValueError, match="baseline_percentile"):
         PolyphonicAudioAnalyzer(baseline_percentile=101)
