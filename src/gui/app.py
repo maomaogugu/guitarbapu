@@ -526,12 +526,19 @@ class MainWindow(QMainWindow):
             "这是共享同一音频的逻辑事件轨，不是独立音频 stem"
         )
         self._apply_tablature(controller.tablature)
+        master_text = ""
+        if self.master_analysis is not None:
+            master_text = (
+                f"；整曲分析：{len(self.master_analysis.notes)} 个音符，"
+                f"{len(self.master_analysis.chords)} 个和弦"
+            )
         self.status_label.setText(
             f"当前轨道：{track.name}；"
             f"{len(track.analysis.notes)} 个音符，"
             f"{len(track.analysis.chords)} 个和弦，"
             f"{len(track.analysis.techniques)} 个技巧候选，"
             f"{len(controller.tablature.events)} 个 TAB 事件"
+            f"{master_text}"
         )
 
     def _track_role_changed(self, index: int) -> None:

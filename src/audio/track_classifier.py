@@ -76,14 +76,20 @@ class TrackClassifier:
         role: TrackRole,
     ) -> AudioAnalysis:
         note_keys = {self._note_key(note) for note in notes}
-        chords = tuple(
-            chord
-            for chord in source.chords
-            if all(
-                (midi, round(chord.start, 6), round(chord.duration, 6))
-                in note_keys
-                for midi in chord.midis
+
+        def overlaps_track(chord: Chord) -> bool:
+            chord_start = chord.start
+            chord_end = chord.start + chord.duration
+            return any(
+                chord_start < note.start + note.duration
+                and note.start < chord_end
+                for note in notes
             )
+
+        # Track-level chords are musical context; they must not vanish just
+        # because the melody extraction moved one chord tone to another track.
+        chords = tuple(
+            chord for chord in source.chords if overlaps_track(chord)
         )
         rhythm = None
         if source.rhythm is not None:

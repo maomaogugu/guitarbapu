@@ -222,6 +222,7 @@ tablature = TabGenerator().generate(analysis)
 - **节奏候选**：同一时段有两个以上音高或存在 `Chord`；
 - **未分类**：事件可信度低于分类阈值；
 - **Solo**：暂不自动判断，可在 GUI 中将主音候选轨手动改为 Solo。
+- **可选高音旋律提取**：复音模式下勾选“提取高音旋律轨（指弹实验）”后，同一时段的最高音会进入主音候选轨，其余和弦音留在节奏轨；轨道级和弦事件按时间重叠保留，整曲和弦统计始终可见。
 
 同一音符事件只会分配到一条逻辑轨，不会在主音和节奏轨中重复。轨道切换时，各自的 TAB、编辑历史、撤销/重做状态和人工角色会独立保留。导出 TAB、MIDI 或 MusicXML 时只导出 GUI 中当前选中的轨道，文件名默认加入 `lead` / `rhythm` / `solo` 后缀。
 
@@ -326,4 +327,10 @@ python -m pytest
 ```bash
 python scripts/compare_ascii_tab.py song.mp3 ref.txt --mode polyphonic
 GB_EVAL_CASES=eval_cases.local.json GB_EVAL_MAX_RUNS=1 ./scripts/run_eval_loop.sh
+```
+
+另有多音模型离线对照脚本（Basic Pitch 不随应用分发，按需在独立评测环境安装）：
+
+```bash
+python scripts/compare_basic_pitch.py song.mp3 ref.txt
 ```

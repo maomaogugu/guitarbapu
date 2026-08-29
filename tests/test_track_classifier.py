@@ -98,7 +98,12 @@ def test_fingerstyle_option_moves_highest_chord_tone_to_lead():
         Note(midi, start=0.0, duration=1.0, confidence=0.9)
         for midi in (48, 55, 64)
     )
-    analysis = _analysis(notes)
+    analysis = _analysis(
+        notes,
+        chords=(
+            Chord.from_midis((48, 55, 64), start=0.0, duration=1.0),
+        ),
+    )
 
     default_roles = TrackClassifier().classify(analysis)
     melody_roles = TrackClassifier(
@@ -112,6 +117,9 @@ def test_fingerstyle_option_moves_highest_chord_tone_to_lead():
     ]
     assert [note.midi for note in melody_roles[0].analysis.notes] == [64]
     assert [note.midi for note in melody_roles[1].analysis.notes] == [48, 55]
+    # Chord context must not vanish when one tone moved to the lead track.
+    assert len(melody_roles[0].analysis.chords) == 1
+    assert len(melody_roles[1].analysis.chords) == 1
 
     high_threshold_roles = TrackClassifier(
         extract_melody_from_polyphony=True,
