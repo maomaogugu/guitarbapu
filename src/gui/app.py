@@ -230,6 +230,12 @@ class MainWindow(QMainWindow):
             "其余和弦音留在节奏轨；可能把泛音误当旋律"
         )
         analysis_row.addWidget(self.fingerstyle_melody_checkbox)
+        self.fingerstyle_boost_checkbox = QCheckBox("指弹增强（实验）")
+        self.fingerstyle_boost_checkbox.setToolTip(
+            "仅在复音模式下生效：对响度取对数后再寻峰，"
+            "放宽能量阈值以听清高把位旋律；适合干净指弹，混音歌曲会变噪"
+        )
+        analysis_row.addWidget(self.fingerstyle_boost_checkbox)
         self.analyze_button = QPushButton("开始分析")
         self.analyze_button.setEnabled(False)
         self.analyze_button.clicked.connect(self._start_analysis)
@@ -756,6 +762,10 @@ class MainWindow(QMainWindow):
                 self.analysis_parameters.get("extract_melody_from_polyphony", False)
             )
         )
+        self.fingerstyle_boost_checkbox.setChecked(
+            analysis_mode == "polyphonic"
+            and bool(self.analysis_parameters.get("log_compress", False))
+        )
 
         audio_text = "未记录原音频"
         self.audio = None
@@ -816,6 +826,7 @@ class MainWindow(QMainWindow):
         self.analysis_mode_combo.setEnabled(False)
         self.separate_guitar_checkbox.setEnabled(False)
         self.fingerstyle_melody_checkbox.setEnabled(False)
+        self.fingerstyle_boost_checkbox.setEnabled(False)
         self.cancel_analysis_button.setEnabled(True)
         self.analysis_progress.setVisible(True)
         self.analysis_progress.setRange(0, 0)
@@ -842,7 +853,8 @@ class MainWindow(QMainWindow):
                 f"正在进行{mode_text}音高、音符和节奏分析，请稍候…"
             )
         if analysis_mode == "polyphonic":
-            analyzer = PolyphonicAudioAnalyzer()
+            gentle_boost = self.fingerstyle_boost_checkbox.isChecked()
+            analyzer = PolyphonicAudioAnalyzer(log_compress=gentle_boost)
             self.analysis_parameters = {
                 "analysis_mode": analysis_mode,
                 "min_midi": analyzer.min_midi,
@@ -854,6 +866,7 @@ class MainWindow(QMainWindow):
                 "max_polyphony": analyzer.max_polyphony,
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
                 "attack_weight": analyzer.attack_weight,
+                "log_compress": analyzer.log_compress,
                 "extract_melody_from_polyphony": extract_melody,
                 "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
@@ -955,6 +968,7 @@ class MainWindow(QMainWindow):
         self.analysis_mode_combo.setEnabled(True)
         self.separate_guitar_checkbox.setEnabled(self.demucs_available)
         self.fingerstyle_melody_checkbox.setEnabled(True)
+        self.fingerstyle_boost_checkbox.setEnabled(True)
         self.cancel_analysis_button.setEnabled(False)
         self.analysis_progress.setVisible(False)
         self.analysis_future = None
