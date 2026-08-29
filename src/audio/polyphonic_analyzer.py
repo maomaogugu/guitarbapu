@@ -52,6 +52,7 @@ class PolyphonicAudioAnalyzer:
         harmonic_salience: float = 0.0,
         pre_emphasis: float = 0.0,
         log_compress: bool = False,
+        baseline_percentile: float = 50.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -77,6 +78,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("harmonic_salience must be between 0 and 1")
         if not 0 <= pre_emphasis < 1:
             raise ValueError("pre_emphasis must be in [0, 1)")
+        if not 0 <= baseline_percentile <= 100:
+            raise ValueError("baseline_percentile must be between 0 and 100")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -92,6 +95,7 @@ class PolyphonicAudioAnalyzer:
         self.harmonic_salience = float(harmonic_salience)
         self.pre_emphasis = float(pre_emphasis)
         self.log_compress = bool(log_compress)
+        self.baseline_percentile = float(baseline_percentile)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -199,7 +203,11 @@ class PolyphonicAudioAnalyzer:
                     (1.0 - self.attack_weight) * scores
                     + self.attack_weight * attack_scores
                 )
-        scores = np.maximum(scores - float(np.median(scores)), 0.0)
+        if self.baseline_percentile > 0:
+            scores = np.maximum(
+                scores - float(np.percentile(scores, self.baseline_percentile)),
+                0.0,
+            )
         if self.log_compress:
             scores = np.log1p(scores * 40.0)
         if self.harmonic_salience > 0:

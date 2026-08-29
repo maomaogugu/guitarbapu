@@ -255,6 +255,7 @@ def main() -> int:
         default=False,
         help="Enable the gentle fingerstyle log-compress boost",
     )
+    parser.add_argument("--baseline-percentile", type=float, default=50.0)
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -270,6 +271,7 @@ def main() -> int:
         octave_ratio=args.octave_ratio,
         energy_threshold=args.energy_threshold,
         log_compress=args.log_compress,
+        baseline_percentile=args.baseline_percentile,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output is None:
