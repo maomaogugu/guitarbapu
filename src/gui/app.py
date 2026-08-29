@@ -41,6 +41,7 @@ from src.audio.demucs_separator import DemucsConfig, DemucsSeparator
 from src.audio.loader import AudioData, load_audio
 from src.audio.polyphonic_analyzer import PolyphonicAudioAnalyzer
 from src.audio.separation_cache import SeparationCache
+from src.audio.track_classifier import TrackClassifier
 from src.audio.separator import (
     SeparationCancelled,
     SeparationError,
@@ -223,6 +224,12 @@ class MainWindow(QMainWindow):
                 "请在 Python 3.12 .venv 中安装 requirements-separation.txt"
             )
         analysis_row.addWidget(self.separate_guitar_checkbox)
+        self.fingerstyle_melody_checkbox = QCheckBox("提取高音旋律轨（指弹实验）")
+        self.fingerstyle_melody_checkbox.setToolTip(
+            "仅在复音模式下生效：把同一时段的最高音分入旋律候选轨，"
+            "其余和弦音留在节奏轨；可能把泛音误当旋律"
+        )
+        analysis_row.addWidget(self.fingerstyle_melody_checkbox)
         self.analyze_button = QPushButton("开始分析")
         self.analyze_button.setEnabled(False)
         self.analyze_button.clicked.connect(self._start_analysis)
@@ -729,6 +736,12 @@ class MainWindow(QMainWindow):
             self.demucs_available
             and bool(self.analysis_parameters.get("use_separation", False))
         )
+        self.fingerstyle_melody_checkbox.setChecked(
+            analysis_mode == "polyphonic"
+            and bool(
+                self.analysis_parameters.get("extract_melody_from_polyphony", False)
+            )
+        )
 
         audio_text = "未记录原音频"
         self.audio = None
@@ -788,12 +801,17 @@ class MainWindow(QMainWindow):
         self.open_project_button.setEnabled(False)
         self.analysis_mode_combo.setEnabled(False)
         self.separate_guitar_checkbox.setEnabled(False)
+        self.fingerstyle_melody_checkbox.setEnabled(False)
         self.cancel_analysis_button.setEnabled(True)
         self.analysis_progress.setVisible(True)
         self.analysis_progress.setRange(0, 0)
         self._clear_result(keep_project_path=True)
         use_separation = self.separate_guitar_checkbox.isChecked()
         analysis_mode = str(self.analysis_mode_combo.currentData())
+        extract_melody = (
+            analysis_mode == "polyphonic"
+            and self.fingerstyle_melody_checkbox.isChecked()
+        )
         if self.selected_file is not None:
             self._set_playback_sources(
                 {"原音频": (self.selected_file, self.audio)},
@@ -821,6 +839,8 @@ class MainWindow(QMainWindow):
                 "relative_pitch_threshold": analyzer.relative_pitch_threshold,
                 "max_polyphony": analyzer.max_polyphony,
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
+                "attack_weight": analyzer.attack_weight,
+                "extract_melody_from_polyphony": extract_melody,
                 "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
             }
@@ -836,6 +856,7 @@ class MainWindow(QMainWindow):
                 "beat_subdivision": analyzer.rhythm_analyzer.subdivision,
                 "min_note_midi": analyzer.min_note_midi,
                 "max_note_midi": analyzer.max_note_midi,
+                "extract_melody_from_polyphony": False,
                 "technique_analysis": "contour-v1",
                 "use_separation": use_separation,
             }
@@ -850,6 +871,9 @@ class MainWindow(QMainWindow):
             analyzer=analyzer,
             tab_generator=TabGenerator(),
             separator=separator,
+            track_classifier=TrackClassifier(
+                extract_melody_from_polyphony=extract_melody
+            ),
         )
 
         def progress_callback(progress: SeparationProgress) -> None:
@@ -916,6 +940,7 @@ class MainWindow(QMainWindow):
         self.open_project_button.setEnabled(True)
         self.analysis_mode_combo.setEnabled(True)
         self.separate_guitar_checkbox.setEnabled(self.demucs_available)
+        self.fingerstyle_melody_checkbox.setEnabled(True)
         self.cancel_analysis_button.setEnabled(False)
         self.analysis_progress.setVisible(False)
         self.analysis_future = None

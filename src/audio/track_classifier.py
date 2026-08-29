@@ -27,10 +27,20 @@ class TrackCandidate:
 class TrackClassifier:
     """Split events by texture without claiming independent audio stems."""
 
-    def __init__(self, *, confidence_threshold: float = 0.35) -> None:
+    def __init__(
+        self,
+        *,
+        confidence_threshold: float = 0.35,
+        extract_melody_from_polyphony: bool = False,
+        melody_min_midi: int = 55,
+    ) -> None:
         if not 0 <= confidence_threshold <= 1:
             raise ValueError("confidence_threshold must be between 0 and 1")
+        if not 0 <= melody_min_midi <= 127:
+            raise ValueError("melody_min_midi must be between 0 and 127")
         self.confidence_threshold = float(confidence_threshold)
+        self.extract_melody_from_polyphony = bool(extract_melody_from_polyphony)
+        self.melody_min_midi = int(melody_min_midi)
 
     @staticmethod
     def _event_key(note: Note) -> tuple[float, float]:
@@ -138,6 +148,21 @@ class TrackClassifier:
                 notes,
                 chord_keys=chord_keys,
             )
+            if (
+                self.extract_melody_from_polyphony
+                and role is TrackRole.RHYTHM
+                and len(notes) >= 2
+                and notes[-1].midi >= self.melody_min_midi
+                and notes[-1].midi > notes[-2].midi
+            ):
+                melody = notes[-1]
+                by_role[TrackRole.LEAD].append(melody)
+                confidence_by_role[TrackRole.LEAD].append(
+                    melody.confidence if melody.confidence is not None else confidence
+                )
+                by_role[TrackRole.RHYTHM].extend(notes[:-1])
+                confidence_by_role[TrackRole.RHYTHM].append(confidence)
+                continue
             by_role[role].extend(notes)
             confidence_by_role[role].append(confidence)
 

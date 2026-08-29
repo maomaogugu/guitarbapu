@@ -93,6 +93,33 @@ def test_mixed_material_splits_without_duplicate_notes():
     assert len(classified) == len(set(classified))
 
 
+def test_fingerstyle_option_moves_highest_chord_tone_to_lead():
+    notes = tuple(
+        Note(midi, start=0.0, duration=1.0, confidence=0.9)
+        for midi in (48, 55, 64)
+    )
+    analysis = _analysis(notes)
+
+    default_roles = TrackClassifier().classify(analysis)
+    melody_roles = TrackClassifier(
+        extract_melody_from_polyphony=True,
+    ).classify(analysis)
+
+    assert [candidate.role for candidate in default_roles] == [TrackRole.RHYTHM]
+    assert [candidate.role for candidate in melody_roles] == [
+        TrackRole.LEAD,
+        TrackRole.RHYTHM,
+    ]
+    assert [note.midi for note in melody_roles[0].analysis.notes] == [64]
+    assert [note.midi for note in melody_roles[1].analysis.notes] == [48, 55]
+
+    high_threshold_roles = TrackClassifier(
+        extract_melody_from_polyphony=True,
+        melody_min_midi=65,
+    ).classify(analysis)
+    assert [candidate.role for candidate in high_threshold_roles] == [TrackRole.RHYTHM]
+
+
 def test_low_confidence_group_is_kept_as_unknown():
     analysis = _analysis(
         (Note(64, start=0.0, duration=0.5, confidence=0.1),)
