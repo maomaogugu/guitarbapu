@@ -160,6 +160,8 @@ def test_rejects_sample_rate_below_configured_pitch_range():
 def test_attack_weight_is_validated_and_defaults_off():
     with pytest.raises(ValueError, match="attack_weight"):
         PolyphonicAudioAnalyzer(attack_weight=1.01)
+    with pytest.raises(ValueError, match="harmonic_salience"):
+        PolyphonicAudioAnalyzer(harmonic_salience=1.01)
 
     analysis = PolyphonicAudioAnalyzer(attack_weight=0.0).analyze(_audio((48, 52, 55)))
     assert [chord.name for chord in analysis.chords] == ["C"]

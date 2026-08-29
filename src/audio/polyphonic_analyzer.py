@@ -48,6 +48,7 @@ class PolyphonicAudioAnalyzer:
         min_segment_duration: float = 0.10,
         beat_subdivision: int = 4,
         attack_weight: float = 0.0,
+        harmonic_salience: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -65,6 +66,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("min_segment_duration must be positive")
         if not 0 <= attack_weight <= 1:
             raise ValueError("attack_weight must be between 0 and 1")
+        if not 0 <= harmonic_salience <= 1:
+            raise ValueError("harmonic_salience must be between 0 and 1")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -76,6 +79,7 @@ class PolyphonicAudioAnalyzer:
         self.max_polyphony = int(max_polyphony)
         self.min_segment_duration = float(min_segment_duration)
         self.attack_weight = float(attack_weight)
+        self.harmonic_salience = float(harmonic_salience)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -182,6 +186,16 @@ class PolyphonicAudioAnalyzer:
                     + self.attack_weight * attack_scores
                 )
         scores = np.maximum(scores - float(np.median(scores)), 0.0)
+        if self.harmonic_salience > 0:
+            salience = scores.copy()
+            for shift, weight in ((12, 0.6), (19, 0.4), (24, 0.3), (28, 0.2)):
+                shifted = np.zeros_like(scores)
+                shifted[:-shift] = scores[shift:]
+                salience = salience + weight * shifted
+            scores = (
+                (1.0 - self.harmonic_salience) * scores
+                + self.harmonic_salience * salience
+            )
         maximum = float(np.max(scores)) if scores.size else 0.0
         if not math.isfinite(maximum) or maximum <= 0:
             return ((), ())
