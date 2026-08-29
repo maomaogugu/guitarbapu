@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-# Convenience entry point: forwards to ailoop.sh.
-exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/ailoop.sh" "$@"

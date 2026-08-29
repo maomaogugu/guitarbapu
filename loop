@@ -1,3 +1,0 @@
-#!/usr/bin/env sh
-# Convenience entry point: forwards to loop.sh.
-exec "$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)/loop.sh" "$@"
