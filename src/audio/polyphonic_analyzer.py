@@ -54,7 +54,7 @@ class PolyphonicAudioAnalyzer:
         log_compress: bool = False,
         baseline_percentile: float = 50.0,
         novelty_weight: float = 0.0,
-        bin_normalize: bool = False,
+        freq_weight: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -84,6 +84,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("baseline_percentile must be between 0 and 100")
         if not 0 <= novelty_weight <= 1:
             raise ValueError("novelty_weight must be between 0 and 1")
+        if not 0 <= freq_weight <= 2:
+            raise ValueError("freq_weight must be between 0 and 2")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -101,7 +103,7 @@ class PolyphonicAudioAnalyzer:
         self.log_compress = bool(log_compress)
         self.baseline_percentile = float(baseline_percentile)
         self.novelty_weight = float(novelty_weight)
-        self.bin_normalize = bool(bin_normalize)
+        self.freq_weight = float(freq_weight)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -166,12 +168,14 @@ class PolyphonicAudioAnalyzer:
 
         frame_count = min(strengths.shape[1], rms.size, frame_times.size)
         strengths = strengths[:, :frame_count]
-        if self.bin_normalize and frame_count:
-            # Constant-Q filters integrate over ~1/f windows, which hugely
-            # inflates low-register magnitudes.  Rescale every midi bin by its
-            # own typical level so bass cannot drown out quiet melody notes.
-            floor = np.percentile(strengths, 60.0, axis=1, keepdims=True)
-            strengths = strengths / np.maximum(floor, 1e-6)
+        if self.freq_weight > 0 and frame_count:
+            # Constant-Q filters integrate over ~1/f windows, hugely inflating
+            # low-register magnitudes; multiply by f**gamma to compensate.
+            freqs = 440.0 * 2.0 ** (
+                (np.arange(self.min_midi, self.max_midi + 1) - 69.0) / 12.0
+            )
+            gains = (freqs / freqs[0]) ** self.freq_weight
+            strengths = strengths * gains[:, None]
         return (
             strengths,
             rms[:frame_count],

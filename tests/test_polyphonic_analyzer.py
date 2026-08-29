@@ -87,8 +87,10 @@ def test_novelty_weight_is_validated():
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
 
 
-def test_bin_normalize_keeps_chord_detection():
-    analysis = PolyphonicAudioAnalyzer(bin_normalize=True).analyze(
+def test_freq_weight_keeps_chord_detection():
+    with pytest.raises(ValueError, match="freq_weight"):
+        PolyphonicAudioAnalyzer(freq_weight=2.1)
+    analysis = PolyphonicAudioAnalyzer(freq_weight=1.0).analyze(
         _audio((48, 52, 55))
     )
     assert {48, 52, 55} <= {note.midi for note in analysis.notes}
