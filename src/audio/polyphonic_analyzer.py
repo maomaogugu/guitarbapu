@@ -51,6 +51,8 @@ class PolyphonicAudioAnalyzer:
         harmonic_salience: float = 0.0,
         pre_emphasis: float = 0.0,
         log_compress: bool = False,
+        track_note_onsets: bool = False,
+        note_onset_sensitivity: float = 0.12,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -71,7 +73,9 @@ class PolyphonicAudioAnalyzer:
         if not 0 <= harmonic_salience <= 1:
             raise ValueError("harmonic_salience must be between 0 and 1")
         if not 0 <= pre_emphasis < 1:
-            raise ValueError("pre_emphasis must be in [0, 1)")
+            raise ValueError("pre_emphasis must be in [0, 1]")
+        if not 0 < note_onset_sensitivity <= 1:
+            raise ValueError("note_onset_sensitivity must be between 0 and 1")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -86,6 +90,8 @@ class PolyphonicAudioAnalyzer:
         self.harmonic_salience = float(harmonic_salience)
         self.pre_emphasis = float(pre_emphasis)
         self.log_compress = bool(log_compress)
+        self.track_note_onsets = bool(track_note_onsets)
+        self.note_onset_sensitivity = float(note_onset_sensitivity)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -251,15 +257,12 @@ class PolyphonicAudioAnalyzer:
         self,
         audio: AudioData,
         onset_times: tuple[float, ...],
+        strengths: np.ndarray,
+        rms: np.ndarray,
+        frame_times: np.ndarray,
+        global_peak_rms: float,
     ) -> tuple[_PitchSegment, ...]:
-        waveform = self._waveform(audio)
-        strengths, rms, frame_times = self._midi_strengths(
-            waveform, audio.sample_rate
-        )
         if rms.size == 0:
-            return ()
-        global_peak_rms = float(np.max(rms))
-        if not math.isfinite(global_peak_rms) or global_peak_rms <= 0:
             return ()
 
         segments: list[_PitchSegment] = []
@@ -292,6 +295,79 @@ class PolyphonicAudioAnalyzer:
                 segments.append(segment)
         return tuple(segments)
 
+    def _note_onset_events(
+        self,
+        strengths: np.ndarray,
+        rms: np.ndarray,
+        frame_times: np.ndarray,
+        global_peak_rms: float,
+    ) -> tuple[Note, ...]:
+        """Track pitch-band energy rises to catch fingerstyle note attacks.
+
+        Global onset detection tends to miss soft melody plucks that occur
+        while chord tones still ring.  Tracking an exponential-decay envelope
+        per MIDI band lets every string re-attack create its own event, even
+        when other notes sustain underneath.
+        """
+
+        if strengths.size == 0 or frame_times.size < 2:
+            return ()
+        frame_dt = float(frame_times[-1] - frame_times[0]) / (
+            frame_times.size - 1
+        )
+        if frame_dt <= 0:
+            return ()
+        # Guitar notes decay audibly; refresh the envelope a little slower
+        # than a natural string decay so only genuine re-attacks trigger.
+        decay = math.exp(-frame_dt / 0.55)
+        refractory = 0.09  # seconds between two onsets on the same string
+        min_duration = 0.05
+        notes: list[Note] = []
+        voiced = rms >= global_peak_rms * self.energy_threshold
+        for index in range(strengths.shape[0]):
+            series = strengths[index]
+            peak = float(np.max(series))
+            floor = float(np.median(series))
+            if not math.isfinite(peak) or peak <= floor:
+                continue
+            threshold = floor + self.note_onset_sensitivity * (peak - floor)
+            envelope = 0.0
+            last_onset = -math.inf
+            rising_start = 0
+            onset_frames: list[int] = []
+            for frame, value in enumerate(series):
+                trigger = max(threshold, envelope * 1.18)
+                if (
+                    voiced[frame]
+                    and value >= trigger
+                    and frame_times[frame] - last_onset >= refractory
+                ):
+                    last_onset = float(frame_times[rising_start])
+                    onset_frames.append(rising_start)
+                if value < envelope:
+                    rising_start = frame
+                envelope = max(value, envelope * decay)
+            midi = self.min_midi + index
+            for onset_index, frame in enumerate(onset_frames):
+                start = float(frame_times[frame])
+                level = float(series[frame])
+                end = float(frame_times[-1])
+                for follow in range(frame + 1, series.size):
+                    if series[follow] <= level * 0.35:
+                        end = float(frame_times[follow])
+                        break
+                confidence = max(0.0, min(1.0, level / max(peak, 1e-9)))
+                notes.append(
+                    Note(
+                        midi,
+                        start=start,
+                        duration=max(min_duration, end - start),
+                        confidence=confidence,
+                    )
+                )
+        notes.sort(key=lambda note: (note.start, note.midi))
+        return tuple(notes)
+
     def detect_events(
         self, audio: AudioData
     ) -> tuple[
@@ -309,9 +385,18 @@ class PolyphonicAudioAnalyzer:
                 "audio sample rate is too low for the configured polyphonic range"
             )
         onset_times, timing = self.rhythm_analyzer.detect(audio)
+        waveform = self._waveform(audio)
+        strengths, rms, frame_times = self._midi_strengths(
+            waveform, audio.sample_rate
+        )
+        global_peak_rms = float(np.max(rms)) if rms.size else 0.0
+        if not math.isfinite(global_peak_rms) or global_peak_rms <= 0:
+            global_peak_rms = 0.0
         notes: list[Note] = []
         chords: list[Chord] = []
-        for segment in self._segments(audio, onset_times):
+        for segment in self._segments(
+            audio, onset_times, strengths, rms, frame_times, global_peak_rms
+        ):
             duration = max(0.0, segment.end - segment.start)
             segment_notes = tuple(
                 Note(
@@ -332,6 +417,13 @@ class PolyphonicAudioAnalyzer:
                         confidence=float(np.mean(segment.confidences)),
                     )
                 )
+        if self.track_note_onsets and global_peak_rms > 0:
+            extra = self._note_onset_events(
+                strengths, rms, frame_times, global_peak_rms
+            )
+            if extra:
+                notes.extend(extra)
+                notes.sort(key=lambda note: (note.start, note.midi))
         return (tuple(notes), tuple(chords), onset_times, timing)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:

@@ -243,6 +243,7 @@ def main() -> int:
     parser.add_argument("--relative-threshold", type=float, default=0.24)
     parser.add_argument("--harmonic-ratio", type=float, default=0.58)
     parser.add_argument("--energy-threshold", type=float, default=0.08)
+    parser.add_argument("--note-onset-sensitivity", type=float, default=0.12)
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -256,6 +257,8 @@ def main() -> int:
         relative_pitch_threshold=args.relative_threshold,
         harmonic_ratio=args.harmonic_ratio,
         energy_threshold=args.energy_threshold,
+        track_note_onsets=True,
+        note_onset_sensitivity=args.note_onset_sensitivity,
     )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output is None:
