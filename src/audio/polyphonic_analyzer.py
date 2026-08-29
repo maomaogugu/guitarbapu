@@ -49,6 +49,7 @@ class PolyphonicAudioAnalyzer:
         beat_subdivision: int = 4,
         attack_weight: float = 0.0,
         harmonic_salience: float = 0.0,
+        pre_emphasis: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -68,6 +69,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("attack_weight must be between 0 and 1")
         if not 0 <= harmonic_salience <= 1:
             raise ValueError("harmonic_salience must be between 0 and 1")
+        if not 0 <= pre_emphasis < 1:
+            raise ValueError("pre_emphasis must be in [0, 1)")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -80,18 +83,21 @@ class PolyphonicAudioAnalyzer:
         self.min_segment_duration = float(min_segment_duration)
         self.attack_weight = float(attack_weight)
         self.harmonic_salience = float(harmonic_salience)
+        self.pre_emphasis = float(pre_emphasis)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
         )
 
-    @staticmethod
-    def _waveform(audio: AudioData) -> np.ndarray:
+    def _waveform(self, audio: AudioData) -> np.ndarray:
         waveform = np.asarray(audio.waveform, dtype=np.float32)
         if waveform.ndim == 2:
             waveform = waveform.mean(axis=1)
         if waveform.ndim != 1:
             raise ValueError("audio waveform must be one-dimensional")
+        if self.pre_emphasis > 0 and waveform.size > 1:
+            emphasized = waveform[1:] - self.pre_emphasis * waveform[:-1]
+            waveform = np.concatenate((waveform[:1], emphasized))
         return waveform
 
     def _midi_strengths(

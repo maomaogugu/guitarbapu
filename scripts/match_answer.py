@@ -137,6 +137,54 @@ def _strict_score(
     }
 
 
+def _sequence_score(targets, tablature: Tablature, offset: float) -> dict:
+    """Order-based per-(measure, string) sequence match with difflib."""
+
+    import difflib
+
+    bar_length = 4.0 * 60.0 / 72.0
+    cells: dict[tuple[int, int], list[int]] = {}
+    detected_cells: dict[tuple[int, int], list[int]] = {}
+
+    for time, string, fret, measure, _tech in targets:
+        cells.setdefault((measure, string), []).append(fret)
+
+    for event in tablature.events:
+        measure_position = (event.start - offset) / bar_length
+        measure = int(measure_position) + 1
+        if 1 <= measure:
+            detected_cells.setdefault((measure, event.string), []).append(
+                event.fret
+            )
+
+    total = 0
+    hits = 0
+    details: list[dict] = []
+    for (measure, string), expected in sorted(cells.items()):
+        detected = detected_cells.get((measure, string), [])
+        matcher = difflib.SequenceMatcher(None, expected, detected)
+        matched_events = sum(
+            block.size for block in matcher.get_matching_blocks()
+        )
+        hits += matched_events
+        total += len(expected)
+        details.append(
+            {
+                "measure": measure,
+                "string": string,
+                "expected": expected,
+                "detected": detected,
+                "matched": matched_events,
+            }
+        )
+    return {
+        "sequence_recall": round(hits / total, 4) if total else 0.0,
+        "sequence_hits": hits,
+        "sequence_total": total,
+        "sequence_cells": details,
+    }
+
+
 def run(
     audio_path: Path,
     answer_path: Path,
@@ -173,6 +221,7 @@ def run(
         guitar.midi_at,
         result.analysis.notes,
     )
+    report.update(_sequence_score(targets, result.tablature, offset))
     report.update(
         {
             "offset_seconds": offset,
