@@ -76,6 +76,15 @@ def test_octave_ratio_independently_controls_pure_octave_suppression():
         PolyphonicAudioAnalyzer(octave_ratio=0.0)
 
 
+def test_novelty_weight_is_validated():
+    with pytest.raises(ValueError, match="novelty_weight"):
+        PolyphonicAudioAnalyzer(novelty_weight=1.01)
+    analysis = PolyphonicAudioAnalyzer(novelty_weight=0.5).analyze(
+        _audio((48, 52, 55))
+    )
+    assert tuple(note.midi for note in analysis.notes) == (48, 52, 55)
+
+
 def test_baseline_percentile_is_validated():
     with pytest.raises(ValueError, match="baseline_percentile"):
         PolyphonicAudioAnalyzer(baseline_percentile=101)

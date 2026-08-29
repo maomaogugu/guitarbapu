@@ -53,6 +53,7 @@ class PolyphonicAudioAnalyzer:
         pre_emphasis: float = 0.0,
         log_compress: bool = False,
         baseline_percentile: float = 50.0,
+        novelty_weight: float = 0.0,
     ) -> None:
         if not 0 <= min_midi < max_midi <= 127:
             raise ValueError("MIDI range must be within 0..127")
@@ -80,6 +81,8 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("pre_emphasis must be in [0, 1)")
         if not 0 <= baseline_percentile <= 100:
             raise ValueError("baseline_percentile must be between 0 and 100")
+        if not 0 <= novelty_weight <= 1:
+            raise ValueError("novelty_weight must be between 0 and 1")
 
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
@@ -96,6 +99,7 @@ class PolyphonicAudioAnalyzer:
         self.pre_emphasis = float(pre_emphasis)
         self.log_compress = bool(log_compress)
         self.baseline_percentile = float(baseline_percentile)
+        self.novelty_weight = float(novelty_weight)
         self.rhythm_analyzer = RhythmAnalyzer(
             hop_length=self.hop_length,
             subdivision=beat_subdivision,
@@ -203,6 +207,18 @@ class PolyphonicAudioAnalyzer:
                     (1.0 - self.attack_weight) * scores
                     + self.attack_weight * attack_scores
                 )
+        if self.novelty_weight > 0:
+            # Emphasize freshly attacked pitches over sustained ringing tones
+            # by comparing each frame against the whole-audio per-midi floor.
+            floor = np.median(strengths, axis=1, keepdims=True)
+            novelty = np.maximum(strengths - floor, 0.0)
+            novelty_scores = np.median(novelty[:, voiced], axis=1)
+            peak = float(np.max(novelty_scores))
+            maximum = float(np.max(scores))
+            if peak > 0 and maximum > 0:
+                scores = (1.0 - self.novelty_weight) * (
+                    scores / maximum
+                ) + self.novelty_weight * (novelty_scores / peak)
         if self.baseline_percentile > 0:
             scores = np.maximum(
                 scores - float(np.percentile(scores, self.baseline_percentile)),
