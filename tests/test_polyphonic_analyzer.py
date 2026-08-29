@@ -61,6 +61,21 @@ def test_harmonic_suppression_keeps_power_chord_fundamentals():
     assert analysis.chords[0].name == "E5"
 
 
+def test_octave_ratio_independently_controls_pure_octave_suppression():
+    audio = _audio((45,), harmonics=True)
+
+    default = PolyphonicAudioAnalyzer().analyze(audio)
+    assert 57 not in [note.midi for note in default.notes]
+
+    relaxed = PolyphonicAudioAnalyzer(octave_ratio=0.1).analyze(audio)
+    relaxed_midis = [note.midi for note in relaxed.notes]
+    assert 45 in relaxed_midis
+    assert 57 in relaxed_midis
+
+    with pytest.raises(ValueError, match="octave_ratio"):
+        PolyphonicAudioAnalyzer(octave_ratio=0.0)
+
+
 def test_silence_returns_no_notes_or_chords():
     audio = AudioData(
         waveform=np.zeros(22_050, dtype=np.float32),

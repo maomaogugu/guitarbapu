@@ -44,6 +44,7 @@ class PolyphonicAudioAnalyzer:
         energy_threshold: float = 0.08,
         relative_pitch_threshold: float = 0.24,
         harmonic_ratio: float = 0.58,
+        octave_ratio: float | None = None,
         max_polyphony: int = 6,
         min_segment_duration: float = 0.10,
         beat_subdivision: int = 4,
@@ -62,6 +63,10 @@ class PolyphonicAudioAnalyzer:
             raise ValueError("relative_pitch_threshold must be between 0 and 1")
         if not 0 < harmonic_ratio <= 1:
             raise ValueError("harmonic_ratio must be between 0 and 1")
+        if octave_ratio is None:
+            octave_ratio = harmonic_ratio
+        if octave_ratio <= 0:
+            raise ValueError("octave_ratio must be positive")
         if not 1 <= max_polyphony <= 6:
             raise ValueError("max_polyphony must be between 1 and 6")
         if min_segment_duration <= 0:
@@ -80,6 +85,7 @@ class PolyphonicAudioAnalyzer:
         self.energy_threshold = float(energy_threshold)
         self.relative_pitch_threshold = float(relative_pitch_threshold)
         self.harmonic_ratio = float(harmonic_ratio)
+        self.octave_ratio = float(octave_ratio)
         self.max_polyphony = int(max_polyphony)
         self.min_segment_duration = float(min_segment_duration)
         self.attack_weight = float(attack_weight)
@@ -226,10 +232,13 @@ class PolyphonicAudioAnalyzer:
             harmonic = False
             for lower_index in accepted:
                 lower_midi = self.min_midi + lower_index
-                if (
-                    midi - lower_midi in self._HARMONIC_INTERVALS
-                    and scores[index] <= scores[lower_index] * self.harmonic_ratio
-                ):
+                interval = midi - lower_midi
+                if interval not in self._HARMONIC_INTERVALS:
+                    continue
+                # Real bass+melody octaves are common in fingerstyle, so the
+                # pure octave gets its own (usually looser) suppression ratio.
+                ratio = self.octave_ratio if interval == 12 else self.harmonic_ratio
+                if scores[index] <= scores[lower_index] * ratio:
                     harmonic = True
                     break
             if not harmonic:

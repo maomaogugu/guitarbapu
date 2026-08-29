@@ -242,6 +242,12 @@ def main() -> int:
     parser.add_argument("--attack-weight", type=float, default=0.0)
     parser.add_argument("--relative-threshold", type=float, default=0.24)
     parser.add_argument("--harmonic-ratio", type=float, default=0.58)
+    parser.add_argument(
+        "--octave-ratio",
+        type=float,
+        default=None,
+        help="Suppression ratio for pure octaves (defaults to harmonic-ratio)",
+    )
     parser.add_argument("--energy-threshold", type=float, default=0.08)
     parser.add_argument(
         "--log-compress",
@@ -261,6 +267,7 @@ def main() -> int:
         attack_weight=args.attack_weight,
         relative_pitch_threshold=args.relative_threshold,
         harmonic_ratio=args.harmonic_ratio,
+        octave_ratio=args.octave_ratio,
         energy_threshold=args.energy_threshold,
         log_compress=args.log_compress,
     )
