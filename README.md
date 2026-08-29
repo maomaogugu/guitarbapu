@@ -340,5 +340,5 @@ python scripts/compare_basic_pitch.py song.mp3 ref.txt
 
 ```bash
 python scripts/match_answer.py --audio song.mp3 --answer ref.txt --bars 8
-GB_LOOP_MAX_CYCLES=1 ./loop.sh
+GB_LOOP_MAX_CYCLES=2 ./ailoop.sh   # 自主扫参；最佳结果存 build/ailoop/
 ```
