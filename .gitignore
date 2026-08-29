@@ -14,4 +14,11 @@ dist/
 build/
 *.egg-info/
 
+# Local evaluation artifacts (answer TABs, loop logs, exported test TABs)
+loop-logs/
+eval_cases.local.json
+*-lead.txt
+*-rhythm.txt
+*-solo.txt
+
 .DS_Store
