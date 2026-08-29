@@ -335,3 +335,10 @@ GB_EVAL_CASES=eval_cases.local.json GB_EVAL_MAX_RUNS=1 ./scripts/run_eval_loop.s
 ```bash
 python scripts/compare_basic_pitch.py song.mp3 ref.txt
 ```
+
+有带小节号的标准答案 TAB（`N小节 e|...|` 格式，参考 `build/` 下的本地文件，不提交）时，可直接打分或让循环自动扫参数：
+
+```bash
+python scripts/match_answer.py --audio song.mp3 --answer ref.txt --bars 8
+GB_LOOP_MAX_CYCLES=1 ./loop.sh
+```

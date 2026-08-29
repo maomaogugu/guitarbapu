@@ -1,0 +1,180 @@
+"""Score generated tablature against a hand-checked answer TAB in time domain.
+
+The matcher auto-aligns the reference measures to the audio (the recording may
+contain a spoken intro before bar 1), then reports how many answer events the
+software reproduces on the correct string and fret at the right time.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+import sys
+
+import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from src.audio.loader import load_audio
+from src.audio.polyphonic_analyzer import PolyphonicAudioAnalyzer
+from src.audio.track_classifier import TrackClassifier
+from src.audio.transcription_service import TranscriptionService
+from src.eval.answer_tab import AnswerEvent, parse_answer_tab
+from src.music.guitar import Guitar
+from src.music.tab import Tablature
+
+
+def _answer_targets(
+    events: tuple[AnswerEvent, ...], bpm: float
+) -> tuple[tuple[float, int, int, int, str | None], ...]:
+    """Expand answer events to expected times assuming 4/4 at ``bpm``."""
+
+    measures = sorted({event.measure for event in events})
+    bar_length = 4.0 * 60.0 / bpm
+    targets: list[tuple[float, int, int, int, str | None]] = []
+    for measure in measures:
+        bar_events = sorted(
+            (event for event in events if event.measure == measure),
+            key=lambda event: (event.order, event.string),
+        )
+        for event in bar_events:
+            fraction = event.order / event.span if event.span > 0 else 0.0
+            time = (measure - 1) * bar_length + fraction * bar_length
+            targets.append(
+                (time, event.string, event.fret, event.measure, event.technique)
+            )
+    return tuple(targets)
+
+
+def _scan_offset(
+    targets: tuple[tuple[float, int, int, int, str | None], ...],
+    notes: tuple,
+    midi_at,
+    duration: float,
+    bar_length: float,
+) -> float:
+    starts = np.asarray([note.start for note in notes], dtype=float)
+    midis = np.asarray([note.midi for note in notes], dtype=float)
+    if starts.size == 0:
+        return 0.0
+    span = targets[-1][0] + bar_length
+    best_score = -1.0
+    best_offset = 0.0
+    for offset in np.arange(0.0, max(0.1, duration - span), 0.5):
+        hits = 0
+        for time, string, fret, _measure, _tech in targets:
+            target = midi_at(string, fret)
+            mask = np.abs(starts - (offset + time)) <= 0.30
+            if mask.any() and np.isin(midis[mask], (target, target - 12, target + 12)).any():
+                hits += 1
+        score = hits / len(targets)
+        if score > best_score:
+            best_score, best_offset = score, float(offset)
+    for offset in np.arange(max(0.0, best_offset - 0.6), best_offset + 0.61, 0.1):
+        hits = 0
+        for time, string, fret, _measure, _tech in targets:
+            target = midi_at(string, fret)
+            mask = np.abs(starts - (offset + time)) <= 0.225
+            if mask.any() and np.isin(midis[mask], (target,)).any():
+                hits += 1
+        score = hits / len(targets)
+        if score > best_score:
+            best_score, best_offset = score, float(offset)
+    return best_offset
+
+
+def _strict_score(
+    targets, tablature: Tablature, offset: float, tolerance: float = 0.3
+) -> dict:
+    events = tuple(
+        (event.start, event.string, event.fret) for event in tablature.events
+    )
+    hits = 0
+    misses: list[dict] = []
+    for time, string, fret, measure, technique in targets:
+        absolute = offset + time
+        ok = any(
+            abs(start - absolute) <= tolerance
+            and detected_string == string
+            and detected_fret == fret
+            for start, detected_string, detected_fret in events
+        )
+        if ok:
+            hits += 1
+        else:
+            misses.append(
+                {
+                    "measure": measure,
+                    "string": string,
+                    "fret": fret,
+                    "time": round(absolute, 3),
+                }
+            )
+    return {
+        "recall": round(hits / len(targets), 4),
+        "hits": hits,
+        "total": len(targets),
+        "misses": misses[:40],
+    }
+
+
+def run(audio_path: Path, answer_path: Path, *, bars: int = 8, **analyzer_kwargs) -> dict:
+    audio = load_audio(audio_path)
+    events = parse_answer_tab(answer_path.read_text(encoding="utf-8"))
+    guitar = Guitar.standard()
+    service = TranscriptionService(
+        analyzer=PolyphonicAudioAnalyzer(**analyzer_kwargs),
+        track_classifier=TrackClassifier(),
+    )
+    result = service.transcribe(audio_path, audio=audio)
+    timing = result.analysis.rhythm.timing if result.analysis.rhythm else None
+    bpm = 72.0
+    bar_length = 4.0 * 60.0 / bpm
+    targets = _answer_targets(events, bpm)
+    offset = _scan_offset(targets, result.analysis.notes, guitar.midi_at, audio.duration, bar_length)
+    report = _strict_score(targets, result.tablature, offset)
+    report.update(
+        {
+            "offset_seconds": offset,
+            "detected_bpm": timing.tempo_bpm if timing is not None else None,
+            "tab_events": len(result.tablature.events),
+            "notes": len(result.analysis.notes),
+            "chords": len(result.analysis.chords),
+        }
+    )
+    return report
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--audio", required=True, type=Path)
+    parser.add_argument("--answer", required=True, type=Path)
+    parser.add_argument("--bars", type=int, default=8)
+    parser.add_argument("--attack-weight", type=float, default=0.0)
+    parser.add_argument("--relative-threshold", type=float, default=0.24)
+    parser.add_argument("--harmonic-ratio", type=float, default=0.58)
+    parser.add_argument("--energy-threshold", type=float, default=0.08)
+    parser.add_argument("--output", type=Path)
+    args = parser.parse_args()
+
+    report = run(
+        args.audio,
+        args.answer,
+        bars=args.bars,
+        attack_weight=args.attack_weight,
+        relative_pitch_threshold=args.relative_threshold,
+        harmonic_ratio=args.harmonic_ratio,
+        energy_threshold=args.energy_threshold,
+    )
+    text = json.dumps(report, ensure_ascii=False, indent=2)
+    if args.output is None:
+        print(text)
+    else:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(text + "\n", encoding="utf-8")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

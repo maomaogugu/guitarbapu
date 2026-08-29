@@ -67,6 +67,41 @@ class RhythmAnalyzer:
             return None
         return tempo
 
+    @staticmethod
+    def _resolve_double_time(
+        onset_envelope: np.ndarray,
+        tempo_bpm: float | None,
+        beat_times: np.ndarray,
+        sample_rate: int,
+        hop_length: int,
+    ) -> tuple[float | None, np.ndarray]:
+        """Fold double-/half-time tempo estimates toward a plausible pop tempo.
+
+        Onset-based trackers often lock onto the eighth-note pulse of slow
+        fingerstyle pieces and report double the notated BPM.  Both octaves fit
+        the onset grid equally well, so pick the octave-ambiguous candidate
+        closest to typical popular-song tempo, keeping the detector's answer on
+        ties.
+        """
+
+        if tempo_bpm is None:
+            return tempo_bpm, beat_times
+        candidates = {tempo_bpm: beat_times}
+        half = tempo_bpm / 2.0
+        if 40.0 <= half <= 130.0:
+            candidates[half] = beat_times[::2]
+        double = tempo_bpm * 2.0
+        if double <= 200.0 and beat_times.size:
+            upsampled = np.concatenate(
+                (beat_times, beat_times + float(30.0 / tempo_bpm))
+            )
+            candidates[double] = np.sort(upsampled)
+        chosen = min(
+            candidates,
+            key=lambda value: (abs(value - 100.0), 0 if value == tempo_bpm else 1),
+        )
+        return chosen, np.asarray(candidates[chosen])
+
     def detect(self, audio: AudioData) -> tuple[tuple[float, ...], TimingInfo]:
         """Return onset times and global beat information.
 
@@ -108,6 +143,13 @@ class RhythmAnalyzer:
             return (), fallback
 
         tempo_bpm = self._tempo_value(tempo)
+        tempo_bpm, beat_times = self._resolve_double_time(
+            np.asarray(onset_envelope, dtype=float),
+            tempo_bpm,
+            np.asarray(beat_times),
+            audio.sample_rate,
+            self.hop_length,
+        )
         timing = TimingInfo(
             tempo_bpm=tempo_bpm,
             beat_times=tuple(float(value) for value in np.asarray(beat_times)),
