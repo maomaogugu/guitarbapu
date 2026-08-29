@@ -1,0 +1,37 @@
+[0m
+> build · deepseek-v4-flash
+[0m
+[0m$ [0mls -la
+total 272
+drwxr-xr-x  28 youzi  staff    896  8月 29 14:16 .
+drwx------+  5 youzi  staff    160  8月 28 20:18 ..
+-rw-r--r--@  1 youzi  staff  12292  8月 29 12:40 .DS_Store
+drwxr-xr-x  16 youzi  staff    512  8月 29 14:06 .git
+-rw-r--r--   1 youzi  staff    125  8月 28 13:51 .gitignore
+drwxr-xr-x   6 youzi  staff    192  8月 28 14:20 .pytest_cache
+drwxr-xr-x   8 youzi  staff    256  8月 28 20:20 .venv
+lrwxr-xr-x   1 youzi  staff      9  8月 29 14:16 ailoop -> ailoop.sh
+-rwxr-xr-x   1 youzi  staff   2665  8月 29 14:16 ailoop.sh
+drwxr-xr-x   9 youzi  staff    288  8月 29 13:39 build
+drwxr-xr-x   4 youzi  staff    128  8月 28 22:35 dist
+-rw-r--r--   1 youzi  staff   1963  8月 28 22:25 GuitarBapu.spec
+lrwxr-xr-x   1 youzi  staff      7  8月 29 13:06 loop -> loop.sh
+drwxr-xr-x   3 youzi  staff     96  8月 29 13:10 loop-logs
+-rwxr-xr-x   1 youzi  staff   2449  8月 29 13:38 loop.sh
+-rw-r--r--   1 youzi  staff    809  8月 28 22:37 pyproject.toml
+-rw-r--r--   1 youzi  staff  18728  8月 29 13:39 README.md
+-rw-r--r--   1 youzi  staff    122  8月 28 22:25 requirements-dev.txt
+-rw-r--r--   1 youzi  staff    147  8月 28 22:37 requirements-separation.txt
+-rw-r--r--   1 youzi  staff    215  8月 28 14:08 requirements.txt
+-rw-r--r--   1 youzi  staff    297  8月 28 22:25 run_app.bat
+-rwxr-xr-x   1 youzi  staff    401  8月 28 19:59 run_app.command
+-rwxr-xr-x   1 youzi  staff    260  8月 28 22:25 run_app.sh
+drwxr-xr-x   9 youzi  staff    288  8月 29 13:28 scripts
+drwxr-xr-x  12 youzi  staff    384  8月 29 00:36 src
+drwxr-xr-x  31 youzi  staff    992  8月 29 13:38 tests
+-rw-r--r--@  1 youzi  staff  20572  8月 28 22:34 路线规划.txt
+-rw-r--r--   1 youzi  staff  30260  8月 29 14:14 晴天吉他谱-指弹谱-g调-虫虫吉他-rhythm.txt
+[0m
+hello
+
+<GOAL_COMPLETE>
