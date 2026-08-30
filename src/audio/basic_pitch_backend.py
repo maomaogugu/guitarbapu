@@ -82,7 +82,10 @@ class BasicPitchAnalyzer:
         self.min_confidence = float(min_confidence)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
-        model = _load_model()
+        import json
+        import subprocess
+        import sys
+
         import soundfile as sf
 
         waveform = np.asarray(audio.waveform, dtype=np.float32)
@@ -90,23 +93,40 @@ class BasicPitchAnalyzer:
             waveform = waveform.mean(axis=1)
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
             temp_path = Path(handle.name)
+        out_path = temp_path.with_suffix(".json")
         try:
             sf.write(temp_path, waveform, audio.sample_rate)
-            from basic_pitch.inference import predict
-
-            _, _, note_events = predict(
-                temp_path,
-                model,
-                onset_threshold=self.onset_threshold,
-                frame_threshold=self.frame_threshold,
-                minimum_note_length=self.minimum_note_length_ms,
-                minimum_frequency=self.minimum_frequency,
-                maximum_frequency=self.maximum_frequency,
+            # TensorFlow 在部分平台上退出时会崩溃（recursive_mutex /
+            # std::terminate at shutdown），推理放进子进程隔离，避免拖垮 GUI。
+            timeout = 300.0 + float(audio.duration) * 4.0
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    "-m",
+                    "src.audio.basic_pitch_worker",
+                    str(temp_path),
+                    str(out_path),
+                    str(self.onset_threshold),
+                    str(self.frame_threshold),
+                    str(self.minimum_note_length_ms),
+                    "" if self.minimum_frequency is None else str(self.minimum_frequency),
+                    "" if self.maximum_frequency is None else str(self.maximum_frequency),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=timeout,
             )
+            if completed.returncode != 0:
+                raise RuntimeError(
+                    "Basic Pitch 推理子进程失败："
+                    + (completed.stderr.strip().splitlines() or ["未知错误"])[-1]
+                )
+            note_events = json.loads(out_path.read_text(encoding="utf-8"))
         finally:
             temp_path.unlink(missing_ok=True)
+            out_path.unlink(missing_ok=True)
         notes = []
-        for start, end, midi, amplitude, _bends in note_events:
+        for start, end, midi, amplitude in note_events:
             if amplitude < self.min_confidence:
                 continue
             if self.min_midi <= midi <= self.max_midi:
@@ -124,6 +144,23 @@ class BasicPitchAnalyzer:
 
     def analyze(self, audio: AudioData) -> AudioAnalysis:
         notes = self.detect_notes(audio)
+        rhythm = None
+        if notes:
+            try:
+                from .rhythm import RhythmAnalyzer
+
+                onset_times, timing = RhythmAnalyzer().detect(audio)
+                from .rhythm import RhythmAnalysis
+
+                from ..music.timing import quantize_notes
+
+                rhythm = RhythmAnalysis(
+                    timing=timing,
+                    onset_times=tuple(onset_times),
+                    quantized_notes=quantize_notes(notes, timing),
+                )
+            except Exception:
+                rhythm = None
         features: dict[str, Any] = {"analysis_mode": "basic_pitch"}
         return AudioAnalysis(
             duration_seconds=float(audio.duration),
@@ -131,4 +168,5 @@ class BasicPitchAnalyzer:
             features=features,
             notes=notes,
             raw_notes=notes,
+            rhythm=rhythm,
         )
