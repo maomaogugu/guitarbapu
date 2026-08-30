@@ -204,9 +204,12 @@ class MainWindow(QMainWindow):
         self.analysis_mode_combo = QComboBox()
         self.analysis_mode_combo.addItem("单音（推荐）", "monophonic")
         self.analysis_mode_combo.addItem("和弦/复音（实验）", "polyphonic")
+        self.analysis_mode_combo.addItem("神经转录/Basic Pitch（指弹推荐）", "basic_pitch")
         self.analysis_mode_combo.setToolTip(
             "实验模式使用 CQT 同时检测最多 6 个吉他音高，"
-            "适合干净和弦，可能有泛音误检"
+            "适合干净和弦，可能有泛音误检；\n"
+            "神经转录使用 Basic Pitch 模型，指弹/密集织体明显更准，"
+            "首次使用需要安装可选依赖"
         )
         analysis_row.addWidget(self.analysis_mode_combo)
         self.separate_guitar_checkbox = QCheckBox("先分离吉他（Demucs）")
@@ -842,7 +845,10 @@ class MainWindow(QMainWindow):
                 {"原音频": (self.selected_file, self.audio)},
                 selected="原音频",
             )
-        mode_text = "和弦/复音" if analysis_mode == "polyphonic" else "单音"
+        mode_text = {
+            "polyphonic": "和弦/复音",
+            "basic_pitch": "神经转录",
+        }.get(analysis_mode, "单音")
         if use_separation:
             self.status_label.setText(
                 f"正在准备吉他分离和{mode_text}分析；"
@@ -852,7 +858,26 @@ class MainWindow(QMainWindow):
             self.status_label.setText(
                 f"正在进行{mode_text}音高、音符和节奏分析，请稍候…"
             )
-        if analysis_mode == "polyphonic":
+        if analysis_mode == "basic_pitch":
+            from src.audio.basic_pitch_backend import BasicPitchAnalyzer
+
+            analyzer = BasicPitchAnalyzer(
+                onset_threshold=0.3,
+                frame_threshold=0.15,
+                minimum_note_length_ms=60.0,
+            )
+            self.analysis_parameters = {
+                "analysis_mode": analysis_mode,
+                "onset_threshold": analyzer.onset_threshold,
+                "frame_threshold": analyzer.frame_threshold,
+                "minimum_note_length_ms": analyzer.minimum_note_length_ms,
+                "min_midi": analyzer.min_midi,
+                "max_midi": analyzer.max_midi,
+                "extract_melody_from_polyphony": False,
+                "technique_analysis": "contour-v1",
+                "use_separation": use_separation,
+            }
+        elif analysis_mode == "polyphonic":
             gentle_boost = self.fingerstyle_boost_checkbox.isChecked()
             analyzer = PolyphonicAudioAnalyzer(
                 log_compress=gentle_boost,

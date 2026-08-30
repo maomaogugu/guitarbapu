@@ -1,0 +1,8 @@
+-r requirements.txt
+
+# Optional neural transcription backend (Basic Pitch). The base app works
+# without these; 首次使用前运行: pip install -r requirements-neural.txt
+"setuptools<81"          # resampy 仍依赖 pkg_resources
+basic-pitch[onnx]>=0.3,<0.4
+tensorflow>=2.16,<3
+tf_keras>=2.16           # TF_USE_LEGACY_KERAS=1 加载旧 SavedModel

@@ -598,6 +598,31 @@ def test_gui_polyphonic_mode_builds_polyphonic_analyzer(monkeypatch, tmp_path):
     app.processEvents()
 
 
+def test_gui_basic_pitch_mode_builds_basic_pitch_analyzer(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    audio_path = tmp_path / "chord.wav"
+    sf.write(audio_path, np.zeros(1000, dtype=np.float32), 1000)
+    captured = {}
+    window = MainWindow()
+    window._set_audio_source(audio_path, load_audio(audio_path))
+    window.analysis_mode_combo.setCurrentIndex(
+        window.analysis_mode_combo.findData("basic_pitch")
+    )
+
+    def fake_submit(function, *args, **kwargs):
+        captured["analyzer"] = function.__self__.analyzer
+        return Future()
+
+    monkeypatch.setattr(window.analysis_executor, "submit", fake_submit)
+    window._start_analysis()
+
+    assert captured["analyzer"].__class__.__name__ == "BasicPitchAnalyzer"
+    assert window.analysis_parameters["analysis_mode"] == "basic_pitch"
+    assert window.analysis_parameters["onset_threshold"] == 0.3
+    window.close()
+    app.processEvents()
+
+
 def test_gui_switches_logical_tracks_and_preserves_independent_edits():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
