@@ -61,6 +61,7 @@ class BasicPitchAnalyzer:
         min_midi: int = 40,
         max_midi: int = 88,
         min_confidence: float = 0.0,
+        simplify: bool = True,
     ) -> None:
         if not 0 < onset_threshold <= 1:
             raise ValueError("onset_threshold must be in (0, 1]")
@@ -80,6 +81,7 @@ class BasicPitchAnalyzer:
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
         self.min_confidence = float(min_confidence)
+        self.simplify = bool(simplify)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
         import json
@@ -140,6 +142,11 @@ class BasicPitchAnalyzer:
                     )
                 )
         notes.sort(key=lambda note: (note.start, note.midi))
+        if self.simplify:
+            from ..music.note_filter import simplify_notes
+
+            # Neural output is far denser than a human can play; humanize it.
+            return tuple(simplify_notes(tuple(notes)))
         return tuple(notes)
 
     def analyze(self, audio: AudioData) -> AudioAnalysis:
