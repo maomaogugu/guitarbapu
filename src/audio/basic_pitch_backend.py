@@ -62,6 +62,10 @@ class BasicPitchAnalyzer:
         max_midi: int = 88,
         min_confidence: float = 0.0,
         simplify: bool = True,
+        simplify_density: float = 16.0,
+        simplify_max_simultaneous: int = 6,
+        simplify_min_duration: float = 0.05,
+        simplify_merge_gap: float = 0.03,
     ) -> None:
         if not 0 < onset_threshold <= 1:
             raise ValueError("onset_threshold must be in (0, 1]")
@@ -82,6 +86,10 @@ class BasicPitchAnalyzer:
         self.max_midi = int(max_midi)
         self.min_confidence = float(min_confidence)
         self.simplify = bool(simplify)
+        self.simplify_density = float(simplify_density)
+        self.simplify_max_simultaneous = int(simplify_max_simultaneous)
+        self.simplify_min_duration = float(simplify_min_duration)
+        self.simplify_merge_gap = float(simplify_merge_gap)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
         import json
@@ -146,7 +154,15 @@ class BasicPitchAnalyzer:
             from ..music.note_filter import simplify_notes
 
             # Neural output is far denser than a human can play; humanize it.
-            return tuple(simplify_notes(tuple(notes)))
+            return tuple(
+                simplify_notes(
+                    tuple(notes),
+                    merge_gap_seconds=self.simplify_merge_gap,
+                    min_duration=self.simplify_min_duration,
+                    max_simultaneous=self.simplify_max_simultaneous,
+                    max_notes_per_second=self.simplify_density,
+                )
+            )
         return tuple(notes)
 
     def analyze(self, audio: AudioData) -> AudioAnalysis:
