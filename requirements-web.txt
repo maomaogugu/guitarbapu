@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Optional in-app score player (alphaTab over Qt WebEngine). Without this the
+# "演奏视图" tab shows a hint and everything else keeps working.
+PyQt6-WebEngine>=6.6

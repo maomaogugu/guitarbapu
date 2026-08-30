@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import replace
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -351,7 +352,38 @@ class MainWindow(QMainWindow):
         self.result_tabs.addTab(self.tab_output, "六线谱 TAB")
         self.piano_roll = PianoRollView()
         self.result_tabs.addTab(self.piano_roll, "钢琴卷帘")
+        # 演奏视图：内嵌 alphaTab（Songscription 同款渲染+发声组件）
+        self.web_engine_available = False
+        try:
+            from PyQt6.QtWebEngineWidgets import QWebEngineView
+
+            self.performance_view = QWebEngineView()
+            self.performance_view.loadFinished.connect(
+                self._performance_view_loaded
+            )
+            self.web_engine_available = True
+        except ImportError:
+            from PyQt6.QtWidgets import QLabel as _QLabel
+
+            self.performance_view = _QLabel(
+                "演奏视图需要可选依赖：pip install PyQt6-WebEngine"
+                "\n（见 requirements-web.txt）"
+            )
+        self.result_tabs.addTab(self.performance_view, "演奏视图")
         tab_layout.addWidget(self.result_tabs)
+        if self.web_engine_available:
+            player_html = Path(__file__).resolve().parent / "web" / "player.html"
+            from PyQt6.QtCore import QUrl as _QUrl
+            from PyQt6.QtWebEngineCore import QWebEngineSettings
+
+            settings = self.performance_view.settings()
+            settings.setAttribute(
+                QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True
+            )
+            settings.setAttribute(
+                QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True
+            )
+            self.performance_view.setUrl(_QUrl.fromLocalFile(str(player_html)))
         splitter.addWidget(tab_group)
 
         editor_group = QGroupBox("TAB 事件编辑")
@@ -1267,6 +1299,23 @@ class MainWindow(QMainWindow):
         self._set_result_actions_enabled(True)
         self._update_editor_actions()
 
+    def _performance_view_loaded(self, ok: bool) -> None:
+        if ok and self.tablature is not None:
+            self._push_performance_tex()
+
+    def _push_performance_tex(self) -> None:
+        if not self.web_engine_available or self.tablature is None:
+            return
+        from src.exporters.alphatex import to_alphatex
+
+        title = (
+            self.selected_file.stem if self.selected_file is not None else "Transcription"
+        )
+        tex = to_alphatex(self.tablature, title=title)
+        self.performance_view.page().runJavaScript(
+            f"loadTex({json.dumps(tex)});"
+        )
+
     def _display_results(
         self, analysis: AudioAnalysis, tablature: Tablature
     ) -> None:
@@ -1330,6 +1379,7 @@ class MainWindow(QMainWindow):
             )
             for event in tablature.events
         )
+        self._push_performance_tex()
 
     @staticmethod
     def _event_midi(event: TabEvent, tablature: Tablature) -> int:

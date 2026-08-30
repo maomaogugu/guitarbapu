@@ -742,9 +742,10 @@ def test_gui_has_piano_roll_tab_and_new_actions():
     app = QApplication.instance() or QApplication([])
     window = MainWindow()
 
-    assert window.result_tabs.count() == 2
+    assert window.result_tabs.count() == 3
     assert window.result_tabs.tabText(0) == "六线谱 TAB"
     assert window.result_tabs.tabText(1) == "钢琴卷帘"
+    assert window.result_tabs.tabText(2) == "演奏视图"
     assert window.play_tab_button.text() == "试听 TAB"
     assert window.export_pdf_button.text() == "导出 PDF"
     assert window.import_url_button.text() == "导入链接"

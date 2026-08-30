@@ -6,7 +6,10 @@ import sys
 from PyInstaller.utils.hooks import collect_all
 
 
-datas = []
+datas = [
+    # Bundled alphaTab renderer + fonts + soundfont for the in-app player view
+    ("src/gui/web", "src/gui/web"),
+]
 binaries = []
 hiddenimports = []
 

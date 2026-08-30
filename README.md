@@ -42,6 +42,15 @@ python -m pip install -r requirements-separation.txt
 
 基础功能不依赖 PyTorch/Demucs；不安装时 GUI 会禁用“先分离吉他”，仍可直接分析原音频。
 
+可选增强（按需安装，不装则相应功能自动降级）：
+
+```bash
+python -m pip install -r requirements-neural.txt   # Basic Pitch 神经转录模式
+python -m pip install -r requirements-web.txt      # 演奏视图（内嵌 alphaTab 乐谱播放）
+```
+
+> Windows 打包用 GitHub Actions（见 .github/workflows/build-windows.yml），产物为基础包；神经转录/演奏视图等重量级可选依赖不包含在 exe 中。
+
 运行当前骨架的冒烟测试：
 
 ```bash

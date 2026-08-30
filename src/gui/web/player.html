@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 8px; font-family: sans-serif; background: #fff; }
+  #alphaTab { min-height: 320px; }
+  .hint { color: #666; font-size: 13px; margin: 24px; }
+</style>
+</head>
+<body>
+<div id="alphaTab"><div class="hint">分析完成后，这里会显示可演奏的乐谱…</div></div>
+<script src="alphatab/alphaTab.min.js"></script>
+<script>
+  let api = null;
+  function ensureApi() {
+    if (api) return api;
+    const el = document.getElementById('alphaTab');
+    api = new alphaTab.AlphaTabApi(el, {
+      core: {
+        fontDirectory: 'alphatab/font/',
+        logLevel: 'warn'
+      },
+      player: {
+        enablePlayer: true,
+        soundFont: 'alphatab/soundfont/sonivox.sf3',
+        scrollMode: 'continuous',
+        enableCursor: true,
+        enableUserInteraction: true
+      },
+      display: {
+        layoutMode: 'page'
+      }
+    });
+    return api;
+  }
+  function loadTex(tex) {
+    try {
+      ensureApi().tex(tex);
+    } catch (err) {
+      document.getElementById('alphaTab').innerHTML =
+        '<div class="hint">乐谱渲染失败：' + String(err) + '</div>';
+    }
+  }
+  window.loadTex = loadTex;
+</script>
+</body>
+</html>
