@@ -170,11 +170,17 @@ class FingeringOptimizer:
         padded = tuple(None for _ in notes[6:])
         candidates = []
         for note in enumerated:
-            positions = sorted(
-                self.fretboard.find_positions(note),
-                key=lambda position: (position.fret, position.string),
-            )[:4]
-            candidates.append(tuple(positions) + (None,) if positions else (None,))
+            positions = self.fretboard.find_positions(note)
+            if len(positions) > 6:
+                # keep the lowest-position options first; full enumeration of
+                # every fretboard mapping is quadratic noise
+                positions = tuple(
+                    sorted(
+                        positions,
+                        key=lambda position: (position.fret, position.string),
+                    )[:6]
+                )
+            candidates.append(positions + (None,) if positions else (None,))
         assignments: list[tuple[FretPosition | None, ...]] = []
         for assignment in product(*candidates):
             strings = [
