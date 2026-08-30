@@ -50,3 +50,19 @@ def test_chord_candidates_are_pruned_before_sequence_optimization():
     )
 
     assert 1 <= len(assignments) <= 8
+
+
+def test_dense_neural_cluster_never_explodes_and_fits_six_strings():
+    import time
+
+    optimizer = FingeringOptimizer()
+    cluster = tuple(
+        Note(midi, start=0.0) for midi in range(48, 72)
+    )
+    started = time.perf_counter()
+    (assignment,) = optimizer.optimize_groups((cluster,))
+    elapsed = time.perf_counter() - started
+
+    assert len(assignment) == 24
+    assert elapsed < 5.0
+    assert sum(position is not None for position in assignment) <= 6

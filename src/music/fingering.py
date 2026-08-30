@@ -164,17 +164,24 @@ class FingeringOptimizer:
     def _group_assignments(
         self, notes: tuple[Note, ...]
     ) -> tuple[tuple[FretPosition | None, ...], ...]:
+        # A real guitar chord fits on 6 strings; neural backends can emit
+        # dense clusters that would otherwise explode the cartesian product.
+        enumerated = notes[:6]
+        padded = tuple(None for _ in notes[6:])
         candidates = []
-        for note in notes:
-            positions = self.fretboard.find_positions(note)
-            candidates.append(positions + (None,) if positions else (None,))
+        for note in enumerated:
+            positions = sorted(
+                self.fretboard.find_positions(note),
+                key=lambda position: (position.fret, position.string),
+            )[:4]
+            candidates.append(tuple(positions) + (None,) if positions else (None,))
         assignments: list[tuple[FretPosition | None, ...]] = []
         for assignment in product(*candidates):
             strings = [
                 position.string for position in assignment if position is not None
             ]
             if len(strings) == len(set(strings)):
-                assignments.append(tuple(assignment))
+                assignments.append(tuple(assignment) + padded)
         if assignments:
             assignments.sort(
                 key=lambda assignment: (
