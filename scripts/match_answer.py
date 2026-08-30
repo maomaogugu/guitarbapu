@@ -191,13 +191,20 @@ def run(
     *,
     bars: int = 8,
     export_tab: Path | None = None,
+    backend: str = "cqt",
     **analyzer_kwargs,
 ) -> dict:
     audio = load_audio(audio_path)
     events = parse_answer_tab(answer_path.read_text(encoding="utf-8"))
     guitar = Guitar.standard()
+    if backend == "basic-pitch":
+        from src.audio.basic_pitch_backend import BasicPitchAnalyzer
+
+        analyzer = BasicPitchAnalyzer(**analyzer_kwargs)
+    else:
+        analyzer = PolyphonicAudioAnalyzer(**analyzer_kwargs)
     service = TranscriptionService(
-        analyzer=PolyphonicAudioAnalyzer(**analyzer_kwargs),
+        analyzer=analyzer,
         track_classifier=TrackClassifier(),
     )
     result = service.transcribe(audio_path, audio=audio)
@@ -259,26 +266,47 @@ def main() -> int:
     parser.add_argument("--novelty-weight", type=float, default=0.0)
     parser.add_argument("--freq-weight", type=float, default=0.0)
     parser.add_argument("--frontend", choices=("cqt", "stft"), default="cqt")
+    parser.add_argument(
+        "--backend",
+        choices=("cqt", "basic-pitch"),
+        default="cqt",
+        help="Transcription engine: handcrafted CQT pipeline or Basic Pitch neural model",
+    )
+    parser.add_argument("--bp-onset-threshold", type=float, default=0.5)
+    parser.add_argument("--bp-frame-threshold", type=float, default=0.3)
+    parser.add_argument("--bp-min-note-length-ms", type=float, default=127.7)
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
 
-    report = run(
-        args.audio,
-        args.answer,
-        bars=args.bars,
-        export_tab=args.export_tab,
-        attack_weight=args.attack_weight,
-        relative_pitch_threshold=args.relative_threshold,
-        harmonic_ratio=args.harmonic_ratio,
-        octave_ratio=args.octave_ratio,
-        energy_threshold=args.energy_threshold,
-        log_compress=args.log_compress,
-        baseline_percentile=args.baseline_percentile,
-        novelty_weight=args.novelty_weight,
-        freq_weight=args.freq_weight,
-        frontend=args.frontend,
-    )
+    if args.backend == "basic-pitch":
+        report = run(
+            args.audio,
+            args.answer,
+            bars=args.bars,
+            export_tab=args.export_tab,
+            backend="basic-pitch",
+            onset_threshold=args.bp_onset_threshold,
+            frame_threshold=args.bp_frame_threshold,
+            minimum_note_length_ms=args.bp_min_note_length_ms,
+        )
+    else:
+        report = run(
+            args.audio,
+            args.answer,
+            bars=args.bars,
+            export_tab=args.export_tab,
+            attack_weight=args.attack_weight,
+            relative_pitch_threshold=args.relative_threshold,
+            harmonic_ratio=args.harmonic_ratio,
+            octave_ratio=args.octave_ratio,
+            energy_threshold=args.energy_threshold,
+            log_compress=args.log_compress,
+            baseline_percentile=args.baseline_percentile,
+            novelty_weight=args.novelty_weight,
+            freq_weight=args.freq_weight,
+            frontend=args.frontend,
+        )
     text = json.dumps(report, ensure_ascii=False, indent=2)
     if args.output is None:
         print(text)
