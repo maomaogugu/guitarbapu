@@ -89,6 +89,9 @@ class AudioPlayer(QObject):
     def set_volume(self, volume: float) -> None:
         self.audio_output.setVolume(min(1.0, max(0.0, float(volume))))
 
+    def set_playback_rate(self, rate: float) -> None:
+        self.media_player.setPlaybackRate(min(3.0, max(0.25, float(rate))))
+
     def _state_changed(self, state: QMediaPlayer.PlaybackState) -> None:
         self.playing_changed.emit(
             state == QMediaPlayer.PlaybackState.PlayingState

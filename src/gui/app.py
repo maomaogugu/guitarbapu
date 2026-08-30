@@ -5,6 +5,7 @@ from __future__ import annotations
 from concurrent.futures import CancelledError, Future, ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 from threading import Event
@@ -22,6 +23,7 @@ from PyQt6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QInputDialog,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -32,6 +34,7 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QSplitter,
     QTableWidget,
+    QTabWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
@@ -58,6 +61,7 @@ from src.gui.audio_player import AudioPlayer, format_seconds
 from src.gui.controller import TabEditController, TabEditError
 from src.gui.diagnostics_dialog import DiagnosticsDialog
 from src.gui.event_editor import EventEditorDialog
+from src.gui.piano_roll import PianoRollView
 from src.gui.waveform import WaveformWidget
 from src.music.guitar import Guitar
 from src.music.tab import TabEvent, Tablature
@@ -156,6 +160,12 @@ class MainWindow(QMainWindow):
         self.import_button = QPushButton("导入音频")
         self.import_button.clicked.connect(self._choose_audio_file)
         file_buttons.addWidget(self.import_button)
+        self.import_url_button = QPushButton("导入链接")
+        self.import_url_button.setToolTip(
+            "粘贴 YouTube / 哔哩哔哩等视频链接，自动下载音频（需要 pip install yt-dlp）"
+        )
+        self.import_url_button.clicked.connect(self._import_from_url)
+        file_buttons.addWidget(self.import_url_button)
         self.open_project_button = QPushButton("打开项目")
         self.open_project_button.clicked.connect(self._open_project)
         file_buttons.addWidget(self.open_project_button)
@@ -187,6 +197,22 @@ class MainWindow(QMainWindow):
             self._playback_source_selected
         )
         playback_controls.addWidget(self.playback_source_combo)
+        self.rate_combo = QComboBox()
+        self.rate_combo.addItems(["0.5x", "0.75x", "1.0x", "1.25x", "1.5x", "2.0x"])
+        self.rate_combo.setCurrentText("1.0x")
+        self.rate_combo.setToolTip("变速播放：慢速练难点小节，快速核对整体")
+        self.rate_combo.currentTextChanged.connect(
+            lambda text: self.audio_player.set_playback_rate(
+                float(text.rstrip("x"))
+            )
+        )
+        playback_controls.addWidget(self.rate_combo)
+        self.play_tab_button = QPushButton("试听 TAB")
+        self.play_tab_button.setToolTip(
+            "把当前六线谱合成为吉他音色并加入播放源，便于对照原音频"
+        )
+        self.play_tab_button.clicked.connect(self._preview_tab_audio)
+        playback_controls.addWidget(self.play_tab_button)
         self.position_slider = QSlider(Qt.Orientation.Horizontal)
         self.position_slider.setRange(0, 0)
         self.position_slider.sliderMoved.connect(
@@ -303,6 +329,9 @@ class MainWindow(QMainWindow):
         self.export_midi_button = QPushButton("导出 MIDI")
         self.export_midi_button.clicked.connect(self._export_midi)
         export_layout.addWidget(self.export_midi_button)
+        self.export_pdf_button = QPushButton("导出 PDF")
+        self.export_pdf_button.clicked.connect(self._export_pdf)
+        export_layout.addWidget(self.export_pdf_button)
         self.export_musicxml_button = QPushButton("导出 MusicXML")
         self.export_musicxml_button.clicked.connect(self._export_musicxml)
         export_layout.addWidget(self.export_musicxml_button)
@@ -311,6 +340,7 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Vertical)
         tab_group = QGroupBox("六线谱 TAB 与事件详情")
         tab_layout = QVBoxLayout(tab_group)
+        self.result_tabs = QTabWidget()
         self.tab_output = QPlainTextEdit()
         self.tab_output.setReadOnly(True)
         self.tab_output.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
@@ -318,7 +348,10 @@ class MainWindow(QMainWindow):
             QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
         )
         self.tab_output.setPlaceholderText("分析或打开项目后，六线谱将在这里显示")
-        tab_layout.addWidget(self.tab_output)
+        self.result_tabs.addTab(self.tab_output, "六线谱 TAB")
+        self.piano_roll = PianoRollView()
+        self.result_tabs.addTab(self.piano_roll, "钢琴卷帘")
+        tab_layout.addWidget(self.result_tabs)
         splitter.addWidget(tab_group)
 
         editor_group = QGroupBox("TAB 事件编辑")
@@ -681,6 +714,35 @@ class MainWindow(QMainWindow):
         self.playback_source_combo.blockSignals(False)
         self._activate_playback_source(selected)
 
+    def _preview_tab_audio(self) -> None:
+        if self.tablature is None or not self.tablature.events:
+            self.status_label.setText("没有可以试听的 TAB 事件")
+            return
+        from src.audio.synth import synthesize_tablature
+
+        waveform = synthesize_tablature(self.tablature)
+        if waveform.size == 0:
+            self.status_label.setText("TAB 为空，无法试听")
+            return
+        import soundfile as sf
+
+        handle = tempfile.NamedTemporaryFile(
+            suffix="-tab-preview.wav", delete=False
+        )
+        preview_path = Path(handle.name)
+        handle.close()
+        sf.write(preview_path, waveform, 22050)
+        audio = AudioData(
+            waveform=waveform,
+            sample_rate=22050,
+            duration=len(waveform) / 22050.0,
+            channels=1,
+        )
+        sources = dict(self.playback_sources)
+        sources["TAB 试听"] = (preview_path, audio)
+        self._set_playback_sources(sources, selected="TAB 试听")
+        self.status_label.setText("已合成 TAB 试听音轨，点播放即可对照")
+
     def _activate_playback_source(self, name: str) -> None:
         source = self.playback_sources.get(name)
         if source is None:
@@ -705,6 +767,69 @@ class MainWindow(QMainWindow):
     def _playback_source_selected(self, name: str) -> None:
         if name:
             self._activate_playback_source(name)
+
+    def _import_from_url(self) -> None:
+        url, ok = QInputDialog.getText(
+            self, "导入链接", "粘贴 YouTube / 哔哩哔哩等视频链接："
+        )
+        url = url.strip()
+        if not ok or not url:
+            return
+        if not (url.startswith("http://") or url.startswith("https://")):
+            self.status_label.setText("链接格式不正确，需要以 http(s):// 开头")
+            return
+        import shutil
+
+        if shutil.which("yt-dlp") is None:
+            self.status_label.setText(
+                "未检测到 yt-dlp：请运行 pip install yt-dlp 后重试"
+            )
+            return
+        if not self._confirm_discard_changes():
+            return
+        self.status_label.setText("正在下载音频（yt-dlp）…")
+        QApplication.processEvents()
+        target_dir = Path(tempfile.mkdtemp(prefix="guitarbapu-ytdlp-"))
+        try:
+            completed = subprocess.run(
+                [
+                    "yt-dlp",
+                    "-x",
+                    "--audio-format",
+                    "wav",
+                    "-o",
+                    str(target_dir / "%(title)s.%(ext)s"),
+                    url,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=600,
+            )
+        except subprocess.TimeoutExpired:
+            self.status_label.setText("下载超时，请检查链接或网络")
+            return
+        if completed.returncode != 0:
+            self.status_label.setText(
+                "下载失败：" + (completed.stderr.strip().splitlines() or ["未知错误"])[-1]
+            )
+            return
+        produced = sorted(target_dir.glob("*.wav"))
+        if not produced:
+            self.status_label.setText("下载完成但没有找到音频文件")
+            return
+        path = produced[0]
+        try:
+            audio = load_audio(path)
+        except (OSError, ValueError, RuntimeError) as error:
+            self.status_label.setText(f"音频读取失败：{error}")
+            return
+        self.audio_player.stop()
+        self._clear_result()
+        self._set_audio_source(path, audio)
+        self.file_label.setText(
+            f"来源：{url}\n文件名：{path.name}\n"
+            f"时长：{audio.duration:.2f} 秒\n采样率：{audio.sample_rate} Hz"
+        )
 
     def _choose_audio_file(self) -> None:
         if not self._confirm_discard_changes():
@@ -1197,6 +1322,14 @@ class MainWindow(QMainWindow):
         self.tab_output.setPlainText(
             rendered_tab + "\n\n" + "\n".join(detail_lines)
         )
+        self.piano_roll.set_notes(
+            (
+                event.start,
+                event.duration,
+                self._event_midi(event, tablature),
+            )
+            for event in tablature.events
+        )
 
     @staticmethod
     def _event_midi(event: TabEvent, tablature: Tablature) -> int:
@@ -1526,6 +1659,33 @@ class MainWindow(QMainWindow):
         track = self.tracks.get(self.active_track_id or "")
         track_text = f"当前轨道“{track.name}”" if track is not None else "当前 TAB"
         self.status_label.setText(f"导出成功（{track_text}）：{exported}")
+
+    def _export_pdf(self) -> None:
+        if self.tablature is None or not self.tablature.events:
+            self.status_label.setText("没有可以导出的 TAB")
+            return
+        from PyQt6.QtGui import QTextDocument
+        from PyQt6.QtPrintSupport import QPrinter
+
+        target, _selected = QFileDialog.getSaveFileName(
+            self, "导出 PDF", "", "PDF (*.pdf)"
+        )
+        if not target:
+            return
+        if not target.lower().endswith(".pdf"):
+            target += ".pdf"
+        document = QTextDocument()
+        document.setDefaultFont(
+            QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        )
+        document.setPlainText(
+            TextTabRenderer().render(self.tablature)
+        )
+        printer = QPrinter(QPrinter.PrinterMode.HighResolution)
+        printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+        printer.setOutputFileName(target)
+        document.print_(printer)
+        self.status_label.setText(f"导出成功：{target}")
 
     def _export_text(self) -> None:
         self._export_result(

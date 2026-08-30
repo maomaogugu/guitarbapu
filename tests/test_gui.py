@@ -736,3 +736,42 @@ def test_gui_exports_only_the_selected_logical_track(monkeypatch, tmp_path):
     assert "当前轨道" in window.status_label.text()
     window.close()
     app.processEvents()
+
+
+def test_gui_has_piano_roll_tab_and_new_actions():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+
+    assert window.result_tabs.count() == 2
+    assert window.result_tabs.tabText(0) == "六线谱 TAB"
+    assert window.result_tabs.tabText(1) == "钢琴卷帘"
+    assert window.play_tab_button.text() == "试听 TAB"
+    assert window.export_pdf_button.text() == "导出 PDF"
+    assert window.import_url_button.text() == "导入链接"
+
+    window.piano_roll.set_notes([(0.0, 0.5, 64), (0.5, 0.25, 67)])
+    assert window.piano_roll.canvas.width() > 0
+
+    window.close()
+    app.processEvents()
+
+
+def test_piano_roll_renders_note_midi_range():
+    app = QApplication.instance() or QApplication([])
+    from src.gui.piano_roll import PianoRollWidget
+
+    widget = PianoRollWidget()
+    widget.set_notes([(1.0, 0.5, 64), (1.5, 0.5, 67)])
+    widget.repaint()
+    assert widget.width() >= int(2.5 * widget.pixels_per_second)
+
+    app.processEvents()
+
+
+def test_gui_playback_rate_combo_changes_player_rate():
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow()
+    window.rate_combo.setCurrentText("0.75x")
+    assert abs(window.audio_player.media_player.playbackRate() - 0.75) < 1e-6
+    window.close()
+    app.processEvents()
