@@ -598,6 +598,29 @@ def test_gui_polyphonic_mode_builds_polyphonic_analyzer(monkeypatch, tmp_path):
     app.processEvents()
 
 
+def test_gui_capo_spinbox_flows_into_tab_generator(monkeypatch, tmp_path):
+    app = QApplication.instance() or QApplication([])
+    audio_path = tmp_path / "capo.wav"
+    sf.write(audio_path, np.zeros(1000, dtype=np.float32), 1000)
+    captured = {}
+    window = MainWindow()
+    window._set_audio_source(audio_path, load_audio(audio_path))
+    window.capo_spinbox.setValue(3)
+
+    def fake_submit(function, *args, **kwargs):
+        captured["service"] = function.__self__
+        return Future()
+
+    monkeypatch.setattr(window.analysis_executor, "submit", fake_submit)
+    window._start_analysis()
+
+    service = captured["service"]
+    assert service.tab_generator.guitar.capo == 3
+    assert window.analysis_parameters["capo"] == 3
+    window.close()
+    app.processEvents()
+
+
 def test_gui_basic_pitch_mode_builds_basic_pitch_analyzer(monkeypatch, tmp_path):
     app = QApplication.instance() or QApplication([])
     audio_path = tmp_path / "chord.wav"

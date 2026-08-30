@@ -24,6 +24,16 @@ def test_renderer_aligns_single_and_double_digit_frets():
     assert "Tempo: 120.0 BPM" in rendered
 
 
+def test_renderer_shows_capo_position_in_header():
+    tab = Tablature(guitar=Guitar.standard(capo=3), measure_count=1)
+
+    rendered = TextTabRenderer().render(tab)
+
+    assert "Capo 3" in rendered
+    no_capo = TextTabRenderer().render(Tablature(guitar=Guitar.standard(), measure_count=1))
+    assert "Capo" not in no_capo
+
+
 def test_renderer_wraps_after_four_measures():
     tab = Tablature(measure_count=5)
 

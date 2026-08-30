@@ -29,6 +29,7 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSlider,
+    QSpinBox,
     QSplitter,
     QTableWidget,
     QTableWidgetItem,
@@ -58,6 +59,7 @@ from src.gui.controller import TabEditController, TabEditError
 from src.gui.diagnostics_dialog import DiagnosticsDialog
 from src.gui.event_editor import EventEditorDialog
 from src.gui.waveform import WaveformWidget
+from src.music.guitar import Guitar
 from src.music.tab import TabEvent, Tablature
 from src.music.tab_generator import TabGenerator
 from src.music.tab_renderer import TextTabRenderer
@@ -212,6 +214,16 @@ class MainWindow(QMainWindow):
             "首次使用需要安装可选依赖"
         )
         analysis_row.addWidget(self.analysis_mode_combo)
+        capo_label = QLabel("变调夹：")
+        analysis_row.addWidget(capo_label)
+        self.capo_spinbox = QSpinBox()
+        self.capo_spinbox.setRange(0, 12)
+        self.capo_spinbox.setValue(0)
+        self.capo_spinbox.setToolTip(
+            "夹在第几品（0 表示不用变调夹）。开了变调夹后，"
+            "谱面品位按夹后把位计算（0 品 = 变调夹处音高）"
+        )
+        analysis_row.addWidget(self.capo_spinbox)
         self.separate_guitar_checkbox = QCheckBox("先分离吉他（Demucs）")
         self.demucs_available = DemucsSeparator.is_available()
         self.separate_guitar_checkbox.setEnabled(self.demucs_available)
@@ -755,6 +767,9 @@ class MainWindow(QMainWindow):
         mode_index = self.analysis_mode_combo.findData(analysis_mode)
         if mode_index >= 0:
             self.analysis_mode_combo.setCurrentIndex(mode_index)
+        self.capo_spinbox.setValue(
+            int(self.analysis_parameters.get("capo", 0))
+        )
         self.separate_guitar_checkbox.setChecked(
             self.demucs_available
             and bool(self.analysis_parameters.get("use_separation", False))
@@ -835,6 +850,7 @@ class MainWindow(QMainWindow):
         self.analysis_progress.setRange(0, 0)
         self._clear_result(keep_project_path=True)
         use_separation = self.separate_guitar_checkbox.isChecked()
+        capo = self.capo_spinbox.value()
         analysis_mode = str(self.analysis_mode_combo.currentData())
         extract_melody = (
             analysis_mode == "polyphonic"
@@ -921,12 +937,13 @@ class MainWindow(QMainWindow):
         if use_separation:
             separator = DemucsSeparator(DemucsConfig(model_name="htdemucs_6s"))
             self.analysis_parameters["separation_model"] = "htdemucs_6s"
+        self.analysis_parameters["capo"] = capo
         self.analysis_cancel_requested = False
         self.analysis_cancel_event = Event()
         self.analysis_progress_state = None
         service = TranscriptionService(
             analyzer=analyzer,
-            tab_generator=TabGenerator(),
+            tab_generator=TabGenerator(Guitar.standard(capo=capo)),
             separator=separator,
             track_classifier=TrackClassifier(
                 extract_melody_from_polyphony=extract_melody
@@ -1086,7 +1103,8 @@ class MainWindow(QMainWindow):
             return
         if tablature is None:
             try:
-                tablature = TabGenerator().generate(analysis)
+                capo = int(self.analysis_parameters.get("capo", 0))
+                tablature = TabGenerator(Guitar.standard(capo=capo)).generate(analysis)
             except (RuntimeError, ValueError) as error:
                 self.status_label.setText(f"分析失败：TAB 生成失败：{error}")
                 return

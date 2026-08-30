@@ -77,9 +77,11 @@ class TextTabRenderer:
             if tablature.tempo_bpm is not None
             else "未检测到稳定 BPM"
         )
+        capo = tablature.guitar.capo
+        tuning = "E A D G B E" + (f"   Capo {capo}" if capo else "")
         lines = [
             f"Tempo: {tempo}   Time: {numerator}/{denominator}   "
-            f"Tuning: E A D G B E",
+            f"Tuning: {tuning}",
             f"Mapped: {len(tablature.events)}   "
             f"Unmapped: {len(tablature.unmapped_notes)}",
             "",
