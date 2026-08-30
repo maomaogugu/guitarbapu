@@ -52,3 +52,12 @@
 ## 评测期间新增的回滚保护旋钮（全部默认关闭/向后兼容）
 
 `PolyphonicAudioAnalyzer`: `octave_ratio`, `baseline_percentile`, `novelty_weight`, `freq_weight`, `frontend="stft"`。match_answer.py 有对应 CLI。pytest：153 passed。
+
+## 后续：Basic Pitch 神经后端落地（2026-08-30 第二轮）
+
+- `src/audio/basic_pitch_backend.py`：`BasicPitchAnalyzer`（懒加载模型、兼容垫片 `TF_USE_LEGACY_KERAS=1` + `scipy.signal.gaussian` patch）。
+- GUI 新增「神经转录/Basic Pitch（指弹推荐）」模式，默认参数 onset=0.3 / frame=0.15 / min_len=60ms（实测最优）。
+- `requirements-neural.txt`：`basic-pitch[onnx]` + `tensorflow` + `tf_keras` + `setuptools<81`（resampy 依赖 pkg_resources）。
+- 晴天评测（强制 offset=25.0）：BP(0.3/0.15/60) strict 0.3143 / midi 0.70；BP(0.25/0.12/50) midi 0.7571（最高），strict 0.2714。CQT 仍 0.3857。
+- 已知修复：密集神经音符（单组 >6 音）曾使 `FingeringOptimizer._group_assignments` 笛卡尔积爆炸挂死；已改为惰性扫描 + est>3M 时 10 万组合上限。
+- 结论维持：strict 差距主要在 TAB 指法/时间映射，而非音高检测；midi_recall 由 CQT 0.6714 → BP 0.7571。
