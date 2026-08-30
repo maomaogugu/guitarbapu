@@ -275,6 +275,7 @@ def main() -> int:
     parser.add_argument("--bp-onset-threshold", type=float, default=0.5)
     parser.add_argument("--bp-frame-threshold", type=float, default=0.3)
     parser.add_argument("--bp-min-note-length-ms", type=float, default=127.7)
+    parser.add_argument("--bp-min-confidence", type=float, default=0.0)
     parser.add_argument("--export-tab", type=Path)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
@@ -289,6 +290,7 @@ def main() -> int:
             onset_threshold=args.bp_onset_threshold,
             frame_threshold=args.bp_frame_threshold,
             minimum_note_length_ms=args.bp_min_note_length_ms,
+            min_confidence=args.bp_min_confidence,
         )
     else:
         report = run(

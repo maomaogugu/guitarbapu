@@ -60,6 +60,7 @@ class BasicPitchAnalyzer:
         maximum_frequency: float | None = 1400.0,
         min_midi: int = 40,
         max_midi: int = 88,
+        min_confidence: float = 0.0,
     ) -> None:
         if not 0 < onset_threshold <= 1:
             raise ValueError("onset_threshold must be in (0, 1]")
@@ -69,6 +70,8 @@ class BasicPitchAnalyzer:
             raise ValueError("minimum_note_length_ms must be positive")
         if not 0 <= min_midi <= max_midi <= 127:
             raise ValueError("midi range must satisfy 0 <= min <= max <= 127")
+        if not 0 <= min_confidence <= 1:
+            raise ValueError("min_confidence must be between 0 and 1")
         self.onset_threshold = float(onset_threshold)
         self.frame_threshold = float(frame_threshold)
         self.minimum_note_length_ms = float(minimum_note_length_ms)
@@ -76,6 +79,7 @@ class BasicPitchAnalyzer:
         self.maximum_frequency = maximum_frequency
         self.min_midi = int(min_midi)
         self.max_midi = int(max_midi)
+        self.min_confidence = float(min_confidence)
 
     def detect_notes(self, audio: AudioData) -> tuple[Note, ...]:
         model = _load_model()
@@ -103,6 +107,8 @@ class BasicPitchAnalyzer:
             temp_path.unlink(missing_ok=True)
         notes = []
         for start, end, midi, amplitude, _bends in note_events:
+            if amplitude < self.min_confidence:
+                continue
             if self.min_midi <= midi <= self.max_midi:
                 notes.append(
                     Note(

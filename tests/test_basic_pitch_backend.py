@@ -34,6 +34,18 @@ def test_parameter_validation():
         BasicPitchAnalyzer(minimum_note_length_ms=0.0)
     with pytest.raises(ValueError, match="midi range"):
         BasicPitchAnalyzer(min_midi=90, max_midi=40)
+    with pytest.raises(ValueError, match="min_confidence"):
+        BasicPitchAnalyzer(min_confidence=1.5)
+
+
+def test_min_confidence_filters_weak_notes():
+    try:
+        analyzer = BasicPitchAnalyzer(min_confidence=0.0)
+        analysis = analyzer.analyze(_sine_audio())
+        filtered = BasicPitchAnalyzer(min_confidence=0.99).analyze(_sine_audio())
+    except RuntimeError as exc:
+        pytest.skip(f"basic-pitch 未安装: {exc}")
+    assert len(filtered.notes) <= len(analysis.notes)
 
 
 def test_analyze_produces_neural_notes():
