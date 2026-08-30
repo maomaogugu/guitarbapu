@@ -164,30 +164,29 @@ class FingeringOptimizer:
     def _group_assignments(
         self, notes: tuple[Note, ...]
     ) -> tuple[tuple[FretPosition | None, ...], ...]:
-        # A real guitar chord fits on 6 strings; neural backends can emit
-        # dense clusters that would otherwise explode the cartesian product.
-        enumerated = notes[:6]
-        padded = tuple(None for _ in notes[6:])
         candidates = []
-        for note in enumerated:
+        for note in notes:
             positions = self.fretboard.find_positions(note)
-            if len(positions) > 6:
-                # keep the lowest-position options first; full enumeration of
-                # every fretboard mapping is quadratic noise
-                positions = tuple(
-                    sorted(
-                        positions,
-                        key=lambda position: (position.fret, position.string),
-                    )[:6]
-                )
             candidates.append(positions + (None,) if positions else (None,))
         assignments: list[tuple[FretPosition | None, ...]] = []
+        estimated = 1
+        for candidate in candidates:
+            estimated *= len(candidate)
+        # Neural backends emit dense simultaneous clusters whose cartesian
+        # product explodes (7**N).  Small groups keep full enumeration
+        # (legacy behaviour); huge clusters are scanned lazily in candidate
+        # order and capped so analysis cannot hang.
+        scan_cap = 100_000 if estimated > 3_000_000 else None
+        scanned = 0
         for assignment in product(*candidates):
+            scanned += 1
+            if scan_cap is not None and scanned > scan_cap:
+                break
             strings = [
                 position.string for position in assignment if position is not None
             ]
             if len(strings) == len(set(strings)):
-                assignments.append(tuple(assignment) + padded)
+                assignments.append(tuple(assignment))
         if assignments:
             assignments.sort(
                 key=lambda assignment: (
