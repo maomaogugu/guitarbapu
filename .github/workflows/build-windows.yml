@@ -1,0 +1,47 @@
+name: Build Windows app
+
+# PyInstaller 不能跨平台编译；Windows 版必须在 Windows runner 上构建。
+# 触发方式：
+#   1. 手动：GitHub → Actions → Build Windows app → Run workflow
+#   2. 打 tag（如 v0.2.0）时自动构建并上传到 Release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: python -m pytest -q
+
+      - name: Build application bundle
+        run: python scripts/build_app.py
+
+      - name: Zip bundle
+        run: Compress-Archive -Path dist/GuitarBapu -DestinationPath GuitarBapu-windows.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: GuitarBapu-windows
+          path: GuitarBapu-windows.zip
+          retention-days: 30
+
+      - name: Attach to release (tags only)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: GuitarBapu-windows.zip
