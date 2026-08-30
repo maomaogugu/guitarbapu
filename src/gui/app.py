@@ -865,12 +865,14 @@ class MainWindow(QMainWindow):
                 onset_threshold=0.3,
                 frame_threshold=0.15,
                 minimum_note_length_ms=60.0,
+                min_confidence=0.2,
             )
             self.analysis_parameters = {
                 "analysis_mode": analysis_mode,
                 "onset_threshold": analyzer.onset_threshold,
                 "frame_threshold": analyzer.frame_threshold,
                 "minimum_note_length_ms": analyzer.minimum_note_length_ms,
+                "min_confidence": analyzer.min_confidence,
                 "min_midi": analyzer.min_midi,
                 "max_midi": analyzer.max_midi,
                 "extract_melody_from_polyphony": False,
